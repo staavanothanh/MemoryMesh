@@ -1,0 +1,34 @@
+# Virtual environment
+memory-mesh-env/
+venv/
+env/
+.venv/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# ChromaDB data (local database files)
+db/
+
+# Environment variables (contains API keys, tokens)
+.env
+
+# Log files
+*.log
+logs/
+
+# IDE & Editor
+.vscode/
+.idea/
+
+# Operating System
+Thumbs.db
+.DS_Store
+
+# Testing
+.pytest_cache/
