@@ -19,6 +19,11 @@ TOOLS = [
                     "maximum": 5,
                     "description": "Mức độ quan trọng 1-5 (mặc định 3)",
                 },
+                "level": {
+                    "type": "string",
+                    "enum": ["user", "session", "knowledge"],
+                    "description": "Cấp độ ký ức: user (thông tin cá nhân), session (ngữ cảnh hội thoại), knowledge (kiến thức chung). Mặc định user.",
+                },
                 "user_id": {"type": "string", "description": "ID người dùng (mặc định từ config)"},
             },
             "required": ["content"],

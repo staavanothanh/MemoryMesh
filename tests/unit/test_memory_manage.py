@@ -184,3 +184,18 @@ class TestFinalScore:
         low = {"score": 0.3, "metadata": {"importance": 3, "timestamp": ""}}
         high = {"score": 0.9, "metadata": {"importance": 3, "timestamp": ""}}
         assert memory_manager._compute_final_score(high) > memory_manager._compute_final_score(low)
+
+
+@pytest.mark.asyncio
+async def test_add_memory_with_level(memory_manager):
+    memory_id = await memory_manager.add_memory(
+        text="Session test", level="session", user_id="test_user"
+    )
+    assert memory_id is not None
+    assert memory_id is not None
+
+
+@pytest.mark.asyncio
+async def test_add_memory_invalid_level(memory_manager):
+    with pytest.raises(ValidationError, match="level"):
+        await memory_manager.add_memory(text="test", level="invalid")

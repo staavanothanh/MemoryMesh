@@ -39,21 +39,21 @@ class MemoryManager:
         tags: Optional[List[str]] = None,
         importance: int = 3,
         user_id: str = None,
+        level: str = "user",
     ) -> str:
         """Add a memory with fast path and background enrichment."""
         user_id = user_id or self.config.default_user_id
-        # Validate
+        if level not in ("user", "session", "knowledge"):
+            raise ValidationError("level must be one of: user, session, knowledge")
         if len(text) > self.config.max_memory_length:
             raise ValidationError(f"Memory content exceeds max length {self.config.max_memory_length}")
         if importance < 1 or importance > 5:
             raise ValidationError("Importance must be between 1 and 5")
 
-        # Compute embedding
         embedding = await get_embedding(text, self.config.embedding_model)
 
-        # Fast path: store immediately
         async with self._write_lock:
-            metadata = {"importance": importance}
+            metadata = {"importance": importance, "level": level}
             if tags:
                 metadata["tags"] = tags
             memory_id = await self.backend.add(
@@ -61,6 +61,7 @@ class MemoryManager:
                 content=text,
                 embedding=embedding,
                 metadata=metadata,
+                level=level,
             )
         logger.info("Memory saved: %s", memory_id)
 
@@ -134,15 +135,28 @@ class MemoryManager:
         query: str,
         top_k: int = 5,
         user_id: str = None,
+        level_filter: Optional[List[str]] = None,
     ) -> List[SearchResult]:
-        """Recall with smart truncation: score = fusion * 0.6 + importance * 0.3 + recency * 0.1."""
+        """Recall with smart truncation and level-aware weighting."""
         user_id = user_id or self.config.default_user_id
         embedding = await get_embedding(query, self.config.embedding_model)
-        results = await self.backend.search(embedding, user_id, top_k, query_text=query)
+        results = await self.backend.search(
+            embedding, user_id, top_k, query_text=query, level_filter=level_filter,
+        )
+
+        # Level-weighted scoring when no filter: boost session > user > knowledge
+        if not level_filter:
+            level_weights = {
+                "session": self.config.level_weight_session,
+                "user": self.config.level_weight_user,
+                "knowledge": self.config.level_weight_knowledge,
+            }
+            for m in results:
+                lvl = m.get("metadata", {}).get("level", "user")
+                m["score"] = m["score"] * level_weights.get(lvl, 1.0)
 
         budget = self.config.token_budget
 
-        # Smart re-ranking
         scored = [(self._compute_final_score(m), m) for m in results]
         scored.sort(key=lambda x: x[0], reverse=True)
 

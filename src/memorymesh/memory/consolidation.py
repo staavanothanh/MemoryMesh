@@ -93,7 +93,9 @@ class ConsolidationEngine:
                     "importance": new_importance,
                     "tags": new_tags,
                     "merged": True,
+                    "level": "knowledge",
                 },
+                level="knowledge",
             )
 
             for mem in cluster:

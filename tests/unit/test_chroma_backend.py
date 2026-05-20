@@ -200,3 +200,24 @@ async def test_get_with_embeddings_filters_by_user(backend, sample_embedding):
     assert len(results_b) >= 1
     assert all(r["metadata"]["user_id"] == "user_a" for r in results_a)
     assert all(r["metadata"]["user_id"] == "user_b" for r in results_b)
+
+
+@pytest.mark.asyncio
+async def test_search_filters_by_level(backend, sample_embedding):
+    await backend.add("user1", "Session memory", sample_embedding, level="session")
+    await backend.add("user1", "User memory", sample_embedding, level="user")
+    await backend.add("user1", "Knowledge base", sample_embedding, level="knowledge")
+
+    all_results = await backend.search(sample_embedding, "user1", top_k=10)
+    assert len(all_results) == 3
+
+    session_only = await backend.search(
+        sample_embedding, "user1", top_k=10, level_filter=["session"]
+    )
+    assert len(session_only) == 1
+    assert session_only[0]["metadata"]["level"] == "session"
+
+    mixed = await backend.search(
+        sample_embedding, "user1", top_k=10, level_filter=["session", "user"]
+    )
+    assert len(mixed) == 2

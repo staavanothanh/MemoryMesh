@@ -134,3 +134,23 @@ async def test_fts_failure_fallback(hybrid):
         )
         assert len(results) >= 1
         assert any(r["id"] == mid for r in results)
+
+
+@pytest.mark.asyncio
+async def test_search_with_level_filter(hybrid):
+    await hybrid.add("user1", "Session data", SAMPLE_EMBEDDING, level="session")
+    await hybrid.add("user1", "User data", SAMPLE_EMBEDDING, level="user")
+    await hybrid.add("user1", "Knowledge data", SAMPLE_EMBEDDING, level="knowledge")
+
+    all_results = await hybrid.search(SAMPLE_EMBEDDING, "user1", top_k=10)
+    assert len(all_results) == 3
+
+    filtered = await hybrid.search(
+        SAMPLE_EMBEDDING, "user1", top_k=10, level_filter=["session"]
+    )
+    assert len(filtered) == 1
+
+    mixed = await hybrid.search(
+        SAMPLE_EMBEDDING, "user1", top_k=10, level_filter=["session", "user"]
+    )
+    assert len(mixed) == 2

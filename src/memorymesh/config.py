@@ -51,6 +51,9 @@ class AppConfig:
     chroma: ChromaConfig
     fts: FTSConfig
     consolidation: ConsolidationConfig
+    level_weight_session: float = 2.0
+    level_weight_user: float = 1.5
+    level_weight_knowledge: float = 1.0
     embedding_model: str = "paraphrase-multilingual-MiniLM-L12-v2"
     default_user_id: str = "Shinn"
     mcp_transport: Literal["stdio", "sse"] = "stdio"
@@ -90,6 +93,9 @@ class AppConfig:
                 batch_size=int(os.getenv("CONSOLIDATION_BATCH", "50")),
                 enabled=os.getenv("CONSOLIDATION_ENABLED", "true").lower() == "true",
             ),
+            level_weight_session=float(os.getenv("LEVEL_WEIGHT_SESSION", "2.0")),
+            level_weight_user=float(os.getenv("LEVEL_WEIGHT_USER", "1.5")),
+            level_weight_knowledge=float(os.getenv("LEVEL_WEIGHT_KNOWLEDGE", "1.0")),
             embedding_model=os.getenv("EMBEDDING_MODEL", "paraphrase-multilingual-MiniLM-L12-v2"),
             default_user_id=os.getenv("DEFAULT_USER_ID", "Shinn"),
             mcp_transport=os.getenv("MCP_TRANSPORT", "stdio"),

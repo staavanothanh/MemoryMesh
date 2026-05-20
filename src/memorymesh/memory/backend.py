@@ -9,6 +9,7 @@ class MemoryBackend(Protocol):
         content: str,
         embedding: List[float],
         metadata: Optional[Dict[str, Any]] = None,
+        level: str = "user",
     ) -> str:
         """Store a memory and return its ID."""
         ...
@@ -19,6 +20,7 @@ class MemoryBackend(Protocol):
         user_id: str,
         top_k: int = 5,
         query_text: Optional[str] = None,
+        level_filter: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         """Find memories closest to the embedding for a user."""
         ...

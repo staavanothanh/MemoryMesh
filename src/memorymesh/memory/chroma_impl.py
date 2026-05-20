@@ -26,11 +26,13 @@ class ChromaMemoryBackend:
         content: str,
         embedding: List[float],
         metadata: Optional[Dict[str, Any]] = None,
+        level: str = "user",
     ) -> str:
         memory_id = str(uuid.uuid4())
         meta = {
             "user_id": user_id,
             "timestamp": datetime.now(timezone.utc).isoformat(),
+            "level": level,
             **(metadata or {}),
         }
         self.memories.add(
@@ -63,11 +65,16 @@ class ChromaMemoryBackend:
         embedding: List[float],
         user_id: str,
         top_k: int = 5,
+        level_filter: Optional[List[str]] = None,
         **kwargs,
     ) -> List[Dict[str, Any]]:
+        if level_filter:
+            where: Dict[str, Any] = {"$and": [{"user_id": user_id}, {"level": {"$in": level_filter}}]}
+        else:
+            where: Dict[str, Any] = {"user_id": user_id}
         results = self.memories.query(
             query_embeddings=[embedding],
-            where={"user_id": user_id},
+            where=where,
             n_results=top_k,
         )
         memories = []

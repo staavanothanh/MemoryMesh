@@ -15,6 +15,7 @@ class ToolHandlers:
                 text=args["content"],
                 tags=args.get("tags"),
                 importance=args.get("importance", 3),
+                level=args.get("level", "user"),
                 user_id=args.get("user_id"),
             )
             return {"status": "success", "data": {"id": memory_id}}

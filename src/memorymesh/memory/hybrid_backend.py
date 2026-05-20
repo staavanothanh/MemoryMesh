@@ -33,10 +33,11 @@ class HybridBackend:
         content: str,
         embedding: List[float],
         metadata: Optional[Dict[str, Any]] = None,
+        level: str = "user",
     ) -> str:
-        memory_id = await self.chroma.add(user_id, content, embedding, metadata)
+        memory_id = await self.chroma.add(user_id, content, embedding, metadata, level=level)
         try:
-            await self.fts.add(memory_id, content, user_id)
+            await self.fts.add(memory_id, content, user_id, level=level)
         except Exception as e:
             logger.warning("FTS index failed for %s, degraded to vector-only: %s", memory_id, e)
         return memory_id
@@ -47,16 +48,17 @@ class HybridBackend:
         user_id: str,
         top_k: int = 5,
         query_text: Optional[str] = None,
+        level_filter: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         pool = self._pool_size
 
         chroma_task = asyncio.create_task(
-            self.chroma.search(embedding, user_id, pool)
+            self.chroma.search(embedding, user_id, pool, level_filter=level_filter)
         )
 
         if query_text:
             try:
-                fts_results = await self.fts.search(query_text, user_id, limit=pool)
+                fts_results = await self.fts.search(query_text, user_id, limit=pool, level_filter=level_filter)
             except Exception as e:
                 logger.warning("FTS search failed, falling back to vector-only: %s", e)
                 fts_results = []

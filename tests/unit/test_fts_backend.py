@@ -93,6 +93,23 @@ async def test_delete_nonexistent(fts):
     assert result is True
 
 
+@pytest.mark.asyncio
+async def test_add_with_level(fts):
+    await fts.add("id1", "session content", "user1", level="session")
+    await fts.add("id2", "user content", "user1", level="user")
+    await fts.add("id3", "knowledge content", "user1", level="knowledge")
+
+    all_results = await fts.search("content", "user1", limit=10)
+    assert len(all_results) == 3
+
+    session_only = await fts.search("content", "user1", limit=10, level_filter=["session"])
+    assert len(session_only) == 1
+    assert session_only[0]["id"] == "id1"
+
+    mixed = await fts.search("content", "user1", limit=10, level_filter=["session", "user"])
+    assert len(mixed) == 2
+
+
 def test_sanitize_fts_query():
     assert sanitize_fts_query("Hello, world!") == "Hello world"
     assert sanitize_fts_query("  spaces   ") == "spaces"
