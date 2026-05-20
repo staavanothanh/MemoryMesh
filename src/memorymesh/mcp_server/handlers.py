@@ -8,7 +8,7 @@ from ..memory.session_store import SessionStore
 from ..memory.fact_extractor import FactExtractor
 from ..scanner import CodebaseScanner
 from ..errors import MemoryMeshError
-from ..prompts import SESSION_COMPACT_PROMPT
+from ..prompts import RECALL_INSTRUCTION, SESSION_COMPACT_PROMPT
 
 logger = logging.getLogger(__name__)
 
@@ -199,6 +199,8 @@ class ToolHandlers:
         try:
             user_id = args.get("user_id", self.manager.config.default_user_id)
             system_prompt = args["system_prompt"]
+            if RECALL_INSTRUCTION not in system_prompt:
+                system_prompt = f"{system_prompt}\n\n{RECALL_INSTRUCTION}"
             await self.session_store.update_system_prompt(self._current_session_id, system_prompt)
             memory_id = await self.manager.add_memory(
                 text=f"[System Prompt] {system_prompt}",
@@ -282,8 +284,7 @@ class ToolHandlers:
                 )
             else:
                 memory_id = None
-            await self._auto_scan_codebase(workspace_path, user_id)
-            await self._auto_recall_context(user_id)
+            asyncio.create_task(self._auto_scan_codebase(workspace_path, user_id))
             await self._auto_log("assistant", f"New session created: {session_id}", "new_session", str(args))
             return {
                 "status": "success",
