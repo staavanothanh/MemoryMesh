@@ -1,5 +1,6 @@
 """InstinctEngine — learn patterns from memories and generate instinct rules."""
 
+import json
 import logging
 from collections import Counter
 from typing import List, Dict, Any, Optional
@@ -51,7 +52,6 @@ class InstinctEngine:
         for tag, count in tag_counts.items():
             if count < 3:
                 continue
-            import json
             condition = {"type": "tag_frequency", "tag": tag, "min_count": 3}
             if json.dumps(condition) in existing_conditions:
                 continue
@@ -83,7 +83,6 @@ class InstinctEngine:
         existing = await self.store.get_active_instincts(user_id)
         existing_conditions = {json.dumps(e["condition"]) for e in existing}
 
-        import json
         for word, tag_counter in keyword_tag_map.items():
             total_mentions = sum(tag_counter.values())
             if total_mentions < 3:

@@ -106,7 +106,8 @@ class MemoryMeshServer:
             result = await handler(arguments)
             return [TextContent(type="text", text=str(result))]
 
-    async def _initialize(self):
+    async def _initialize_fast(self):
+        """Fast init: open DBs and restore/resume session."""
         await self.backend.initialize()
         await self.session_store.initialize()
         if self.config.instinct.enabled:
@@ -120,8 +121,14 @@ class MemoryMeshServer:
                 session_id = await self.session_store.create_session(self.config.default_user_id)
                 logger.info("Auto-created session: %s", session_id)
             await self.handlers.set_session(session_id)
+
+    async def _initialize_slow(self):
+        """Slow background init: model-dependent tasks (auto-scan, auto-recall)."""
+        try:
             if self.config.session.auto_scan_codebase:
                 await self.handlers._auto_scan_codebase(user_id=self.config.default_user_id)
+        except Exception as e:
+            logger.warning("Slow initialization failed: %s", e)
 
     async def _cleanup(self):
         logger.info("Shutting down...")
@@ -140,16 +147,19 @@ class MemoryMeshServer:
         logger.info("Shutdown complete")
 
     async def run_stdio(self):
-        await self._initialize()
+        await self._initialize_fast()
         async with stdio_server() as (read_stream, write_stream):
-                await self.mcp_server.run(
-                    read_stream,
-                    write_stream,
-                    self._init_options(),
-                )
+            slow_task = asyncio.create_task(self._initialize_slow())
+            await self.mcp_server.run(
+                read_stream,
+                write_stream,
+                self._init_options(),
+            )
+            slow_task.cancel()
 
     async def run_sse(self):
-        await self._initialize()
+        await self._initialize_fast()
+        await self._initialize_slow()
         sse = SseServerTransport("/messages/")
 
         async def handle_sse(request):
