@@ -106,19 +106,14 @@ class MemoryMeshServer:
             return [TextContent(type="text", text=str(result))]
 
     async def _initialize_fast(self):
-        """Fast init: open DBs and restore/resume session."""
+        """Fast init: open DBs and create a fresh session."""
         await self.backend.initialize()
         await self.session_store.initialize()
         if self.config.instinct.enabled:
             await self.manager.instinct_store.initialize()
         if self.config.session.auto_create_session:
-            active = await self.session_store.get_active_session(self.config.default_user_id)
-            if active:
-                session_id = active["session_id"]
-                logger.info("Resuming active session: %s", session_id)
-            else:
-                session_id = await self.session_store.create_session(self.config.default_user_id)
-                logger.info("Auto-created session: %s", session_id)
+            session_id = await self.session_store.create_session(self.config.default_user_id)
+            logger.info("Auto-created fresh session: %s", session_id)
             await self.handlers.set_session(session_id)
 
     async def _initialize_slow(self):
