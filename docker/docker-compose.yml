@@ -1,0 +1,22 @@
+services:
+  memorymesh:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    ports:
+      - "8090:8090"
+    volumes:
+      - memorymesh-db:/app/db
+    environment:
+      - ROUTER_URL=http://host.docker.internal:20128/v1
+      - DEFAULT_MODEL=ds/deepseek-v4-flash
+      - FALLBACK_MODEL=ds/deepseek-v4-pro
+      - EMBEDDING_MODEL=paraphrase-multilingual-MiniLM-L12-v2
+      - DEFAULT_USER_ID=Shinn
+      - MCP_TRANSPORT=sse
+      - MCP_PORT=8090
+      - LOG_LEVEL=INFO
+    restart: unless-stopped
+
+volumes:
+  memorymesh-db:

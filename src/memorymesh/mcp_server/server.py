@@ -1,9 +1,15 @@
 import asyncio
 import signal
 import logging
+from contextlib import asynccontextmanager
+
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
+from mcp.server.sse import SseServerTransport
 from mcp.types import Tool, TextContent
+from starlette.applications import Starlette
+from starlette.routing import Mount, Route
+import uvicorn
 
 from ..config import AppConfig
 from ..router import RouterClient
@@ -17,6 +23,7 @@ from .handlers import ToolHandlers
 
 logger = logging.getLogger(__name__)
 
+
 class MemoryMeshServer:
     def __init__(self, config: AppConfig):
         self.config = config
@@ -26,6 +33,7 @@ class MemoryMeshServer:
         self.session_store = SessionStore(config.session.db_path)
         self.handlers = ToolHandlers(self.manager, self.session_store)
         self.mcp_server = Server("memorymesh")
+        self._shutdown_event = asyncio.Event()
         self._register_tools()
 
     def _register_tools(self):
@@ -56,7 +64,7 @@ class MemoryMeshServer:
             result = await handler(arguments)
             return [TextContent(type="text", text=str(result))]
 
-    async def run_stdio(self):
+    async def _initialize(self):
         await self.backend.initialize()
         await self.session_store.initialize()
         if self.config.session.auto_create_session:
@@ -70,7 +78,21 @@ class MemoryMeshServer:
             await self.handlers.set_session(session_id)
             if self.config.session.auto_scan_codebase:
                 await self.handlers._auto_scan_codebase(user_id=self.config.default_user_id)
-            # B1: No preload on startup — context starts empty, model calls recall when needed
+
+    async def _cleanup(self):
+        logger.info("Shutting down...")
+        try:
+            await self.backend.close()
+        except Exception as e:
+            logger.warning("Backend close error: %s", e)
+        try:
+            await self.session_store.close()
+        except Exception as e:
+            logger.warning("Session store close error: %s", e)
+        logger.info("Shutdown complete")
+
+    async def run_stdio(self):
+        await self._initialize()
         async with stdio_server() as (read_stream, write_stream):
             await self.mcp_server.run(
                 read_stream,
@@ -78,15 +100,63 @@ class MemoryMeshServer:
                 self.mcp_server.create_initialization_options(),
             )
 
+    async def run_sse(self):
+        await self._initialize()
+        sse = SseServerTransport("/messages/")
+
+        async def handle_sse(request):
+            async with sse.connect_sse(
+                request.scope, request.receive, request._send
+            ) as streams:
+                await self.mcp_server.run(
+                    streams[0],
+                    streams[1],
+                    self.mcp_server.create_initialization_options(),
+                )
+
+        app = Starlette(
+            routes=[
+                Route("/sse", endpoint=handle_sse),
+                Mount("/messages/", app=sse.handle_post_message),
+            ],
+            on_shutdown=[self._cleanup],
+        )
+        config = uvicorn.Config(
+            app,
+            host="0.0.0.0",
+            port=self.config.mcp_port,
+            log_level="info",
+        )
+        server = uvicorn.Server(config)
+        await server.serve()
+
     def run(self):
-        loop = asyncio.get_event_loop()
-        try:
-            asyncio.run(self.run_stdio())
-        except KeyboardInterrupt:
-            logger.info("Server stopped by user")
-        finally:
-            asyncio.run(self.backend.close())
-            asyncio.run(self.session_store.close())
+        async def _run():
+            loop = asyncio.get_event_loop()
+            for sig in (signal.SIGINT, signal.SIGTERM):
+                try:
+                    loop.add_signal_handler(
+                        sig,
+                        lambda: asyncio.create_task(self._shutdown()),
+                    )
+                except NotImplementedError:
+                    pass
+            try:
+                if self.config.mcp_transport == "sse":
+                    await self.run_sse()
+                else:
+                    await self.run_stdio()
+            except Exception as e:
+                logger.error("Server error: %s", e)
+            finally:
+                await self._cleanup()
+
+        asyncio.run(_run())
+
+    async def _shutdown(self):
+        logger.info("Received shutdown signal")
+        self._shutdown_event.set()
+
 
 def main():
     config = AppConfig.from_env()
