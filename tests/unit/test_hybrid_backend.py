@@ -95,6 +95,36 @@ async def test_list_all(hybrid):
 
 
 @pytest.mark.asyncio
+async def test_update_content_and_metadata(hybrid):
+    mid = await hybrid.add("user1", "Original hybrid content", SAMPLE_EMBEDDING)
+
+    updated = await hybrid.update(mid, "Updated hybrid content", {"importance": 5})
+    assert updated is True
+
+    vector_results = await hybrid.chroma.search(SAMPLE_EMBEDDING, "user1", top_k=10)
+    found = next(r for r in vector_results if r["id"] == mid)
+    assert found["content"] == "Updated hybrid content"
+    assert found["metadata"]["importance"] == 5
+
+    fts_results = await hybrid.fts.search("Updated", "user1", limit=10)
+    assert any(r["id"] == mid for r in fts_results)
+
+
+@pytest.mark.asyncio
+async def test_get_with_embeddings(hybrid):
+    mids = []
+    for i in range(3):
+        mid = await hybrid.add("user1", f"Embedding get {i}", SAMPLE_EMBEDDING)
+        mids.append(mid)
+
+    results = await hybrid.get_with_embeddings("user1", limit=10)
+    assert len(results) >= 3
+    found_ids = {r["id"] for r in results}
+    assert all(mid in found_ids for mid in mids)
+    assert all(len(r["embedding"]) == 384 for r in results)
+
+
+@pytest.mark.asyncio
 async def test_fts_failure_fallback(hybrid):
     mid = await hybrid.add("user1", "Fallback test", SAMPLE_EMBEDDING)
 

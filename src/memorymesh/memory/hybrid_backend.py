@@ -79,8 +79,22 @@ class HybridBackend:
             await self.fts.delete(memory_id)
         return success
 
+    async def update(self, memory_id: str, content: str, metadata: Dict[str, Any]) -> bool:
+        success = await self.chroma.update(memory_id, content, metadata)
+        if success:
+            try:
+                await self.fts.update(memory_id, content)
+            except Exception as e:
+                logger.warning("FTS update failed for %s: %s", memory_id, e)
+        return success
+
     async def update_metadata(self, memory_id: str, metadata: Dict[str, Any]) -> bool:
         return await self.chroma.update_metadata(memory_id, metadata)
+
+    async def get_with_embeddings(
+        self, user_id: str, limit: int = 1000, offset: int = 0
+    ) -> List[Dict[str, Any]]:
+        return await self.chroma.get_with_embeddings(user_id, limit, offset)
 
     async def list_all(
         self, user_id: str, limit: int = 100, offset: int = 0

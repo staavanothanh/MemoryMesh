@@ -1,4 +1,5 @@
 import logging
+from ..hooks import hooks as global_hooks
 from ..memory.manager import MemoryManager
 from ..errors import MemoryMeshError
 

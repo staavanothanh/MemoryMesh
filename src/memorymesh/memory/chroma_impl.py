@@ -89,6 +89,46 @@ class ChromaMemoryBackend:
             logger.error("Delete failed: %s", e)
             return False
 
+    async def update(self, memory_id: str, content: str, metadata: Dict[str, Any]) -> bool:
+        """Update content and metadata for an existing memory."""
+        try:
+            existing = self.memories.get(ids=[memory_id])
+            if not existing["ids"]:
+                logger.warning("Memory %s not found for update", memory_id)
+                return False
+            existing_meta = existing["metadatas"][0] or {}
+            existing_meta.update(metadata)
+            self.memories.update(
+                ids=[memory_id],
+                documents=[content],
+                metadatas=[existing_meta],
+            )
+            logger.info("Memory updated: %s", memory_id)
+            return True
+        except Exception as e:
+            logger.error("Update failed for %s: %s", memory_id, e)
+            return False
+
+    async def get_with_embeddings(
+        self, user_id: str, limit: int = 1000, offset: int = 0
+    ) -> List[Dict[str, Any]]:
+        """Get memories with embeddings for consolidation."""
+        results = self.memories.get(
+            where={"user_id": user_id},
+            limit=limit,
+            offset=offset,
+            include=["embeddings", "documents", "metadatas"],
+        )
+        return [
+            {
+                "id": results["ids"][i],
+                "content": results["documents"][i],
+                "embedding": results["embeddings"][i],
+                "metadata": results["metadatas"][i],
+            }
+            for i in range(len(results["ids"]))
+        ]
+
     async def list_all(
         self, user_id: str, limit: int = 100, offset: int = 0
     ) -> List[Dict[str, Any]]:

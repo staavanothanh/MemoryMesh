@@ -7,6 +7,7 @@ from mcp.types import Tool, TextContent
 
 from ..config import AppConfig
 from ..router import RouterClient
+from ..hooks import hooks as global_hooks
 from ..memory.hybrid_backend import HybridBackend
 from ..memory.manager import MemoryManager
 from ..logging_ import setup_logging
@@ -20,7 +21,7 @@ class MemoryMeshServer:
         self.config = config
         self.backend = HybridBackend(config)
         self.router = RouterClient(config.router)
-        self.manager = MemoryManager(config, self.backend, self.router)
+        self.manager = MemoryManager(config, self.backend, self.router, hooks=global_hooks)
         self.handlers = ToolHandlers(self.manager)
         self.mcp_server = Server("memorymesh")
         self._register_tools()

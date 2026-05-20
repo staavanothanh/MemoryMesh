@@ -31,6 +31,18 @@ class MemoryBackend(Protocol):
         """Update metadata for an existing memory."""
         ...
 
+    async def update(
+        self, memory_id: str, content: str, metadata: Dict[str, Any]
+    ) -> bool:
+        """Update content and metadata of an existing memory."""
+        ...
+
+    async def get_with_embeddings(
+        self, user_id: str, limit: int = 1000, offset: int = 0
+    ) -> List[Dict[str, Any]]:
+        """Get memories with their embeddings for processing (e.g. consolidation)."""
+        ...
+
     async def list_all(
         self, user_id: str, limit: int = 100, offset: int = 0
     ) -> List[Dict[str, Any]]:

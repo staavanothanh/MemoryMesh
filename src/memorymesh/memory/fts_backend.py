@@ -66,6 +66,19 @@ class FTSBackend:
             for row in rows
         ]
 
+    async def update(self, memory_id: str, content: str) -> bool:
+        """Update content for an existing FTS entry."""
+        try:
+            await self._db.execute(
+                "UPDATE memory_fts SET content = ? WHERE memory_id = ?",
+                (content, memory_id),
+            )
+            await self._db.commit()
+            return True
+        except Exception as e:
+            logger.warning("FTS update failed for %s: %s", memory_id, e)
+            return False
+
     async def delete(self, memory_id: str) -> bool:
         try:
             await self._db.execute(

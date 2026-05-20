@@ -1,3 +1,4 @@
+import numpy as np
 import pytest
 from memorymesh.memory.chroma_impl import ChromaMemoryBackend
 from memorymesh.config import ChromaConfig
@@ -140,3 +141,62 @@ async def test_update_metadata_merge(backend, sample_embedding):
 async def test_update_metadata_nonexistent(backend):
     updated = await backend.update_metadata("non-existent-id", {"importance": 5})
     assert updated is False
+
+
+@pytest.mark.asyncio
+async def test_update_content_and_metadata(backend, sample_embedding):
+    memory_id = await backend.add(
+        user_id="test_user",
+        content="Original content",
+        embedding=sample_embedding,
+        metadata={"importance": 2},
+    )
+
+    updated = await backend.update(
+        memory_id,
+        content="Updated content",
+        metadata={"importance": 5, "tags": ["updated"]},
+    )
+    assert updated is True
+
+    results = await backend.get_with_embeddings("test_user", limit=10)
+    found = next(r for r in results if r["id"] == memory_id)
+    assert found["content"] == "Updated content"
+    assert found["metadata"]["importance"] == 5
+    assert found["metadata"]["tags"] == ["updated"]
+
+
+@pytest.mark.asyncio
+async def test_update_nonexistent_returns_false(backend):
+    updated = await backend.update("non-existent-id", "content", {"importance": 5})
+    assert updated is False
+
+
+@pytest.mark.asyncio
+async def test_get_with_embeddings_returns_embeddings(backend, sample_embedding):
+    memory_id = await backend.add(
+        user_id="test_user",
+        content="Get embedding test",
+        embedding=sample_embedding,
+        metadata={"importance": 3},
+    )
+
+    results = await backend.get_with_embeddings("test_user", limit=10)
+    assert len(results) >= 1
+    found = next(r for r in results if r["id"] == memory_id)
+    assert np.allclose(found["embedding"], sample_embedding, atol=1e-5)
+    assert found["content"] == "Get embedding test"
+    assert found["metadata"]["importance"] == 3
+
+
+@pytest.mark.asyncio
+async def test_get_with_embeddings_filters_by_user(backend, sample_embedding):
+    await backend.add("user_a", "A's memory", sample_embedding)
+    await backend.add("user_b", "B's memory", sample_embedding)
+
+    results_a = await backend.get_with_embeddings("user_a")
+    results_b = await backend.get_with_embeddings("user_b")
+    assert len(results_a) >= 1
+    assert len(results_b) >= 1
+    assert all(r["metadata"]["user_id"] == "user_a" for r in results_a)
+    assert all(r["metadata"]["user_id"] == "user_b" for r in results_b)

@@ -68,6 +68,26 @@ async def test_delete(fts):
 
 
 @pytest.mark.asyncio
+async def test_update(fts):
+    await fts.add("id1", "Original content", "user1")
+    updated = await fts.update("id1", "Updated content")
+    assert updated is True
+
+    results = await fts.search("Original", "user1", limit=10)
+    assert len(results) == 0
+
+    results = await fts.search("Updated", "user1", limit=10)
+    assert len(results) >= 1
+    assert results[0]["content"] == "Updated content"
+
+
+@pytest.mark.asyncio
+async def test_update_nonexistent(fts):
+    result = await fts.update("non-existent", "content")
+    assert result is True  # SQLite UPDATE on no rows is not an error
+
+
+@pytest.mark.asyncio
 async def test_delete_nonexistent(fts):
     result = await fts.delete("non-existent")
     assert result is True

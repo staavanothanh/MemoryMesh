@@ -9,7 +9,9 @@ from ..errors import ValidationError
 from ..embedder import get_embedding
 from ..router import RouterClient
 from ..schemas import MemoryRecord, SearchResult
+from ..hooks import HookRegistry
 from .backend import MemoryBackend
+from .consolidation import ConsolidationEngine
 from ..prompts import EXTRACT_METADATA_PROMPT
 
 logger = logging.getLogger(__name__)
@@ -17,12 +19,20 @@ logger = logging.getLogger(__name__)
 MAX_RECALL_TOKENS = 1000  # Token budget for recall results
 
 class MemoryManager:
-    def __init__(self, config: AppConfig, backend: MemoryBackend, router: RouterClient):
+    def __init__(
+        self,
+        config: AppConfig,
+        backend: MemoryBackend,
+        router: RouterClient,
+        hooks: Optional[HookRegistry] = None,
+    ):
         self.config = config
         self.backend = backend
         self.router = router
+        self.hooks = hooks
         self._write_lock = asyncio.Lock()
         self._tokenizer = tiktoken.get_encoding("cl100k_base")  # phù hợp DeepSeek
+        self._consolidator = ConsolidationEngine(config, backend, router)
 
     async def add_memory(
         self,
@@ -57,6 +67,16 @@ class MemoryManager:
 
         # Background enrichment (non-blocking)
         asyncio.create_task(self._enrich_memory(memory_id, text, user_id))
+
+        # Background consolidation check (non-blocking)
+        asyncio.create_task(self._maybe_consolidate(user_id))
+
+        # Trigger post-tool hooks
+        if self.hooks:
+            asyncio.create_task(
+                self.hooks.trigger("after_remember", memory_id=memory_id, user_id=user_id)
+            )
+
         return memory_id
 
     async def _enrich_memory(self, memory_id: str, text: str, user_id: str):
@@ -80,6 +100,15 @@ class MemoryManager:
                 logger.info("Enrichment produced no usable fields for %s: %s", memory_id, meta)
         except Exception as e:
             logger.error("Enrichment failed for %s: %s", memory_id, e)
+
+    async def _maybe_consolidate(self, user_id: str):
+        """Run consolidation if enabled, non-blocking."""
+        try:
+            merged = await self._consolidator.run_for_user(user_id)
+            if merged:
+                logger.info("Consolidation merged %d clusters for user %s", merged, user_id)
+        except Exception as e:
+            logger.error("Consolidation failed for user %s: %s", user_id, e)
 
     async def search_memory(
         self,

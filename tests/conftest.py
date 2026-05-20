@@ -3,7 +3,7 @@ from pathlib import Path
 import tempfile
 import shutil
 
-from memorymesh.config import AppConfig, RouterConfig, ChromaConfig, FTSConfig
+from memorymesh.config import AppConfig, RouterConfig, ChromaConfig, FTSConfig, ConsolidationConfig
 from memorymesh.router import RouterClient
 from memorymesh.memory.chroma_impl import ChromaMemoryBackend
 from memorymesh.memory.manager import MemoryManager
@@ -41,6 +41,13 @@ def app_config(router_config, chroma_config, fts_config):
         router=router_config,
         chroma=chroma_config,
         fts=fts_config,
+        consolidation=ConsolidationConfig(
+            similarity_threshold=0.85,
+            min_cluster_size=2,
+            interval_seconds=3600,
+            batch_size=50,
+            enabled=False,
+        ),
         embedding_model="paraphrase-multilingual-MiniLM-L12-v2",
         default_user_id="test_user",
         log_level="DEBUG",

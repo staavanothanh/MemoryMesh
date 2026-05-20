@@ -33,10 +33,24 @@ class FTSConfig:
 
 
 @dataclass
+class ConsolidationConfig:
+    similarity_threshold: float = 0.85
+    min_cluster_size: int = 2
+    interval_seconds: int = 3600
+    batch_size: int = 50
+    enabled: bool = True
+
+    def validate(self):
+        assert 0.0 < self.similarity_threshold <= 1.0, "similarity_threshold must be in (0, 1]"
+        assert self.min_cluster_size >= 2, "min_cluster_size must be >= 2"
+
+
+@dataclass
 class AppConfig:
     router: RouterConfig
     chroma: ChromaConfig
     fts: FTSConfig
+    consolidation: ConsolidationConfig
     embedding_model: str = "paraphrase-multilingual-MiniLM-L12-v2"
     default_user_id: str = "Shinn"
     mcp_transport: Literal["stdio", "sse"] = "stdio"
@@ -65,6 +79,13 @@ class AppConfig:
             fts=FTSConfig(
                 db_path=os.getenv("FTS_DB_PATH", "./db/memory_fts.db"),
             ),
+            consolidation=ConsolidationConfig(
+                similarity_threshold=float(os.getenv("CONSOLIDATION_SIMILARITY", "0.85")),
+                min_cluster_size=int(os.getenv("CONSOLIDATION_MIN_CLUSTER", "2")),
+                interval_seconds=int(os.getenv("CONSOLIDATION_INTERVAL", "3600")),
+                batch_size=int(os.getenv("CONSOLIDATION_BATCH", "50")),
+                enabled=os.getenv("CONSOLIDATION_ENABLED", "true").lower() == "true",
+            ),
             embedding_model=os.getenv("EMBEDDING_MODEL", "paraphrase-multilingual-MiniLM-L12-v2"),
             default_user_id=os.getenv("DEFAULT_USER_ID", "Shinn"),
             mcp_transport=os.getenv("MCP_TRANSPORT", "stdio"),
@@ -80,3 +101,4 @@ class AppConfig:
         self.router.validate()
         self.chroma.validate()
         self.fts.validate()
+        self.consolidation.validate()
