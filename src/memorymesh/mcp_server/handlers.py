@@ -1,9 +1,11 @@
 import json
+import asyncio
 import logging
 from typing import Optional, List
 from ..hooks import hooks as global_hooks
 from ..memory.manager import MemoryManager
 from ..memory.session_store import SessionStore
+from ..memory.fact_extractor import FactExtractor
 from ..scanner import CodebaseScanner
 from ..errors import MemoryMeshError
 from ..prompts import SESSION_COMPACT_PROMPT
@@ -15,6 +17,7 @@ class ToolHandlers:
         self.manager = manager
         self.session_store = session_store
         self._current_session_id: str = ""
+        self._fact_extractor = FactExtractor(manager.config, manager.router)
 
     async def set_session(self, session_id: str):
         self._current_session_id = session_id
@@ -111,6 +114,26 @@ class ToolHandlers:
         except Exception as e:
             logger.warning("Session compaction failed: %s", e)
 
+    async def _extract_and_save_facts(self, conversation: str, user_id: str = ""):
+        """Extract atomic facts from conversation and save them as memories (background)."""
+        uid = user_id or self.manager.config.default_user_id
+        try:
+            facts = await self._fact_extractor.extract_facts(conversation)
+            for item in facts:
+                fact_tags = item.get("tags", []) + ["atomic_fact", item.get("confidence", "medium")]
+                importance = self._fact_extractor._confidence_to_importance(item.get("confidence", "medium"))
+                await self.manager.add_memory(
+                    text=item["fact"],
+                    tags=fact_tags,
+                    importance=importance,
+                    level="knowledge",
+                    user_id=uid,
+                )
+            if facts:
+                logger.info("Saved %d atomic facts from conversation", len(facts))
+        except Exception as e:
+            logger.warning("Atomic fact extraction background task failed: %s", e)
+
     async def handle_remember(self, args: dict) -> dict:
         try:
             memory_id = await self.manager.add_memory(
@@ -194,6 +217,8 @@ class ToolHandlers:
                 level="session",
                 user_id=user_id,
             )
+            # Extract atomic facts in background (non-blocking)
+            asyncio.create_task(self._extract_and_save_facts(combined, user_id))
             return {"status": "success", "data": {"memory_id": memory_id, "session_id": self._current_session_id}}
         except MemoryMeshError as e:
             logger.error("Save context pair failed: %s", e)

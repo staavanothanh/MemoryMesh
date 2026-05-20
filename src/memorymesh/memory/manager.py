@@ -70,6 +70,7 @@ class MemoryManager:
 
         # Background consolidation check (non-blocking)
         asyncio.create_task(self._maybe_consolidate(user_id))
+        asyncio.create_task(self._maybe_resolve_facts(user_id))
 
         # Trigger post-tool hooks
         if self.hooks:
@@ -110,6 +111,15 @@ class MemoryManager:
         except Exception as e:
             logger.error("Consolidation failed for user %s: %s", user_id, e)
 
+    async def _maybe_resolve_facts(self, user_id: str):
+        """Run fact contradiction resolution if enabled, non-blocking."""
+        try:
+            resolved = await self._consolidator.run_fact_consolidation(user_id)
+            if resolved:
+                logger.info("Fact contradiction resolved %d groups for user %s", resolved, user_id)
+        except Exception as e:
+            logger.error("Fact consolidation failed for user %s: %s", user_id, e)
+
     @staticmethod
     def _recency_score(timestamp_str: str) -> float:
         """Compute recency score (0-1) decaying over ~1 day."""
@@ -128,7 +138,15 @@ class MemoryManager:
         fusion_score = mem.get("score", 0.0)
         importance = mem.get("metadata", {}).get("importance", 3) / 5.0
         recency = self._recency_score(mem.get("metadata", {}).get("timestamp", ""))
-        return fusion_score * w_s + importance * w_i + recency * w_r
+
+        base_score = fusion_score * w_s + importance * w_i + recency * w_r
+
+        # Boost atomic facts: prefer concise, structured facts over raw conversation
+        tags = mem.get("metadata", {}).get("tags", [])
+        if isinstance(tags, list) and "atomic_fact" in tags:
+            base_score *= 1.5
+
+        return base_score
 
     async def search_memory(
         self,
