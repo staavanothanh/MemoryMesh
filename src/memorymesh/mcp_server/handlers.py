@@ -1,4 +1,6 @@
+import json
 import logging
+from typing import Optional
 from ..hooks import hooks as global_hooks
 from ..memory.manager import MemoryManager
 from ..memory.session_store import SessionStore
@@ -14,6 +16,9 @@ class ToolHandlers:
 
     async def set_session(self, session_id: str):
         self._current_session_id = session_id
+
+    async def get_current_session_id(self) -> str:
+        return self._current_session_id
 
     async def _auto_log(self, role: str, content: str, tool_name: str = "", tool_args: str = ""):
         if self._current_session_id:
@@ -128,7 +133,118 @@ class ToolHandlers:
             if not session:
                 return {"status": "error", "error": f"Session {session_id} not found"}
             context = await self.session_store.get_context_log(session_id, limit)
-            return {"status": "success", "data": {"session": session, "context_log": context}}
+            snapshots = await self.session_store.get_workspace_snapshots(session_id)
+            return {"status": "success", "data": {"session": session, "context_log": context, "workspace_snapshots": snapshots}}
         except Exception as e:
             logger.error("Get session context failed: %s", e)
+            return {"status": "error", "error": str(e)}
+
+    async def handle_new_session(self, args: dict) -> dict:
+        try:
+            user_id = args.get("user_id", self.manager.config.default_user_id)
+            system_prompt = args.get("system_prompt", "")
+            workspace_path = args.get("workspace_path", "")
+            if self._current_session_id:
+                await self.session_store.end_session(self._current_session_id)
+            session_id = await self.session_store.create_session(
+                user_id=user_id,
+                system_prompt=system_prompt,
+                workspace_path=workspace_path,
+                auto_close_stale=True,
+            )
+            self._current_session_id = session_id
+            if system_prompt:
+                memory_id = await self.manager.add_memory(
+                    text=f"[System Prompt] {system_prompt}",
+                    tags=["system_prompt", "session"],
+                    importance=5,
+                    level="session",
+                    user_id=user_id,
+                )
+            else:
+                memory_id = None
+            await self._auto_log("assistant", f"New session created: {session_id}", "new_session", str(args))
+            return {
+                "status": "success",
+                "data": {
+                    "session_id": session_id,
+                    "memory_id": memory_id,
+                    "message": "Session mới đã được tạo",
+                },
+            }
+        except MemoryMeshError as e:
+            logger.error("New session failed: %s", e)
+            return {"status": "error", "error": str(e)}
+
+    async def handle_end_session(self, args: dict) -> dict:
+        try:
+            session_id = args.get("session_id", self._current_session_id)
+            if not session_id:
+                return {"status": "error", "error": "No active session to end"}
+            await self.session_store.end_session(session_id)
+            if session_id == self._current_session_id:
+                self._current_session_id = ""
+            await self._auto_log("assistant", f"Session ended: {session_id}", "end_session", str(args))
+            return {"status": "success", "data": {"session_id": session_id, "message": "Session đã kết thúc"}}
+        except MemoryMeshError as e:
+            logger.error("End session failed: %s", e)
+            return {"status": "error", "error": str(e)}
+
+    async def handle_save_workspace_context(self, args: dict) -> dict:
+        try:
+            import os
+            import subprocess
+            user_id = args.get("user_id", self.manager.config.default_user_id)
+            workspace_path = args.get("workspace_path", "")
+            if not workspace_path:
+                session = await self.session_store.get_session(self._current_session_id)
+                if session:
+                    workspace_path = session.get("workspace_path", "")
+            if not workspace_path:
+                workspace_path = os.getcwd()
+            snapshot = {"workspace_path": workspace_path, "files": [], "git": {}, "dependencies": {}}
+            if os.path.isdir(workspace_path):
+                root_dirs = [d for d in os.listdir(workspace_path) if os.path.isdir(os.path.join(workspace_path, d)) and not d.startswith((".", "__"))][:30]
+                root_files = [f for f in os.listdir(workspace_path) if os.path.isfile(os.path.join(workspace_path, f))][:50]
+                snapshot["files"] = {"dirs": root_dirs, "files": root_files}
+                git_dir = os.path.join(workspace_path, ".git")
+                if os.path.isdir(git_dir):
+                    try:
+                        result = subprocess.run(
+                            ["git", "log", "--oneline", "-5"],
+                            capture_output=True, text=True, timeout=5, cwd=workspace_path,
+                        )
+                        snapshot["git"]["recent_commits"] = result.stdout.strip().split("\n") if result.stdout else []
+                    except Exception:
+                        snapshot["git"]["recent_commits"] = []
+                    try:
+                        result = subprocess.run(
+                            ["git", "status", "--short"],
+                            capture_output=True, text=True, timeout=5, cwd=workspace_path,
+                        )
+                        snapshot["git"]["status"] = result.stdout.strip().split("\n") if result.stdout else []
+                    except Exception:
+                        snapshot["git"]["status"] = []
+                pyproject = os.path.join(workspace_path, "pyproject.toml")
+                if os.path.isfile(pyproject):
+                    try:
+                        with open(pyproject, "r", encoding="utf-8") as f:
+                            content = f.read()
+                        import re
+                        deps = re.findall(r'^([\w\-]+)\s*=\s*["\']', content, re.MULTILINE)
+                        snapshot["dependencies"]["project"] = deps[:30]
+                    except Exception:
+                        pass
+            await self.session_store.save_workspace_snapshot(self._current_session_id, snapshot)
+            memory_id = await self.manager.add_memory(
+                text=f"[Workspace Snapshot] {json.dumps(snapshot, ensure_ascii=False)[:500]}",
+                tags=["workspace", "session"],
+                importance=4,
+                level="session",
+                user_id=user_id,
+            )
+            await self._auto_log("assistant", f"Workspace snapshot saved", "save_workspace_context", str(args))
+            return {"status": "success", "data": {"memory_id": memory_id, "snapshot": snapshot}}
+        except MemoryMeshError as e:
+            logger.error("Save workspace context failed: %s", e)
             return {"status": "error", "error": str(e)}

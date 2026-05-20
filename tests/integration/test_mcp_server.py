@@ -105,3 +105,78 @@ async def test_handle_list_memories(handlers):
     })
     assert result["status"] == "success"
     assert len(result["data"]) >= 1
+
+
+@pytest.mark.asyncio
+async def test_handle_new_session(handlers, session_store):
+    result = await handlers.handle_new_session({
+        "system_prompt": "Test prompt",
+        "user_id": "test_user",
+    })
+    assert result["status"] == "success"
+    assert "session_id" in result["data"]
+    assert result["data"]["message"] == "Session mới đã được tạo"
+
+    session = await session_store.get_session(result["data"]["session_id"])
+    assert session["system_prompt"] == "Test prompt"
+    assert session["status"] == "active"
+
+    session_id2 = result["data"]["session_id"]
+    assert handlers._current_session_id == session_id2
+
+
+@pytest.mark.asyncio
+async def test_handle_new_session_auto_ends_previous(handlers, session_store):
+    first = await handlers.handle_new_session({"user_id": "test_user"})
+    first_id = first["data"]["session_id"]
+
+    second = await handlers.handle_new_session({"user_id": "test_user"})
+    second_id = second["data"]["session_id"]
+
+    first_session = await session_store.get_session(first_id)
+    assert first_session["status"] == "ended"
+
+    second_session = await session_store.get_session(second_id)
+    assert second_session["status"] == "active"
+
+    assert handlers._current_session_id == second_id
+
+
+@pytest.mark.asyncio
+async def test_handle_end_session(handlers, session_store):
+    create = await handlers.handle_new_session({"user_id": "test_user"})
+    session_id = create["data"]["session_id"]
+
+    result = await handlers.handle_end_session({"session_id": session_id})
+    assert result["status"] == "success"
+    assert result["data"]["message"] == "Session đã kết thúc"
+
+    session = await session_store.get_session(session_id)
+    assert session["status"] == "ended"
+    assert handlers._current_session_id == ""
+
+
+@pytest.mark.asyncio
+async def test_handle_end_session_default_current(handlers, session_store):
+    await handlers.handle_new_session({"user_id": "test_user"})
+
+    result = await handlers.handle_end_session({})
+    assert result["status"] == "success"
+
+
+@pytest.mark.asyncio
+async def test_handle_save_workspace_context(handlers, session_store):
+    await handlers.handle_new_session({"user_id": "test_user"})
+
+    result = await handlers.handle_save_workspace_context({
+        "workspace_path": ".",
+        "user_id": "test_user",
+    })
+    assert result["status"] == "success"
+    assert "memory_id" in result["data"]
+    assert "snapshot" in result["data"]
+    assert "files" in result["data"]["snapshot"]
+    assert "dependencies" in result["data"]["snapshot"]
+
+    snapshots = await session_store.get_workspace_snapshots(handlers._current_session_id)
+    assert len(snapshots) >= 1

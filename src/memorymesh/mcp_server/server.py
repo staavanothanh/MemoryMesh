@@ -45,6 +45,9 @@ class MemoryMeshServer:
                 "save_context_pair": self.handlers.handle_save_context_pair,
                 "list_sessions": self.handlers.handle_list_sessions,
                 "get_session_context": self.handlers.handle_get_session_context,
+                "new_session": self.handlers.handle_new_session,
+                "end_session": self.handlers.handle_end_session,
+                "save_workspace_context": self.handlers.handle_save_workspace_context,
             }
             handler = handler_map.get(name)
             if not handler:
@@ -56,9 +59,14 @@ class MemoryMeshServer:
         await self.backend.initialize()
         await self.session_store.initialize()
         if self.config.session.auto_create_session:
-            session_id = await self.session_store.create_session(self.config.default_user_id)
+            active = await self.session_store.get_active_session(self.config.default_user_id)
+            if active:
+                session_id = active["session_id"]
+                logger.info("Resuming active session: %s", session_id)
+            else:
+                session_id = await self.session_store.create_session(self.config.default_user_id)
+                logger.info("Auto-created session: %s", session_id)
             await self.handlers.set_session(session_id)
-            logger.info("Auto-created session: %s", session_id)
         async with stdio_server() as (read_stream, write_stream):
             await self.mcp_server.run(
                 read_stream,

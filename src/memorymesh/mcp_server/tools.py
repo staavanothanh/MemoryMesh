@@ -123,4 +123,38 @@ TOOLS = [
             "required": ["session_id"],
         },
     ),
+    Tool(
+        name="new_session",
+        description="Tạo một session làm việc mới. Session cũ sẽ tự động được đóng lại.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "system_prompt": {"type": "string", "description": "System prompt cho session mới"},
+                "workspace_path": {"type": "string", "description": "Đường dẫn workspace"},
+                "user_id": {"type": "string", "description": "ID người dùng"},
+            },
+        },
+    ),
+    Tool(
+        name="end_session",
+        description="Kết thúc session làm việc hiện tại.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "session_id": {"type": "string", "description": "ID session cần kết thúc (mặc định session hiện tại)"},
+                "user_id": {"type": "string", "description": "ID người dùng"},
+            },
+        },
+    ),
+    Tool(
+        name="save_workspace_context",
+        description="Chụp nhanh trạng thái workspace hiện tại (danh sách file, git status, dependencies).",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "workspace_path": {"type": "string", "description": "Đường dẫn workspace để snapshot (mặc định từ session)"},
+                "user_id": {"type": "string", "description": "ID người dùng"},
+            },
+        },
+    ),
 ]
