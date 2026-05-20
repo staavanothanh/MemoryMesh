@@ -18,6 +18,7 @@ class MemoryBackend(Protocol):
         embedding: List[float],
         user_id: str,
         top_k: int = 5,
+        query_text: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """Find memories closest to the embedding for a user."""
         ...

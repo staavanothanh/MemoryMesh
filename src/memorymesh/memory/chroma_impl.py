@@ -63,6 +63,7 @@ class ChromaMemoryBackend:
         embedding: List[float],
         user_id: str,
         top_k: int = 5,
+        **kwargs,
     ) -> List[Dict[str, Any]]:
         results = self.memories.query(
             query_embeddings=[embedding],

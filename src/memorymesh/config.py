@@ -24,15 +24,29 @@ class ChromaConfig:
         os.makedirs(self.db_path, exist_ok=True)
 
 @dataclass
+class FTSConfig:
+    db_path: str = "./db/memory_fts.db"
+
+    def validate(self):
+        import os
+        os.makedirs(os.path.dirname(self.db_path) or ".", exist_ok=True)
+
+
+@dataclass
 class AppConfig:
     router: RouterConfig
     chroma: ChromaConfig
+    fts: FTSConfig
     embedding_model: str = "paraphrase-multilingual-MiniLM-L12-v2"
     default_user_id: str = "Shinn"
     mcp_transport: Literal["stdio", "sse"] = "stdio"
     mcp_port: int = 8090
     max_memory_length: int = 2000
     log_level: str = "INFO"
+    rrf_k: int = 60
+    rrf_weight_vec: float = 0.7
+    rrf_weight_fts: float = 0.3
+    rrf_pool_size: int = 20
 
     @staticmethod
     def from_env() -> "AppConfig":
@@ -48,13 +62,21 @@ class AppConfig:
             chroma=ChromaConfig(
                 db_path=os.getenv("CHROMA_DB_PATH", "./db/chroma"),
             ),
+            fts=FTSConfig(
+                db_path=os.getenv("FTS_DB_PATH", "./db/memory_fts.db"),
+            ),
             embedding_model=os.getenv("EMBEDDING_MODEL", "paraphrase-multilingual-MiniLM-L12-v2"),
             default_user_id=os.getenv("DEFAULT_USER_ID", "Shinn"),
             mcp_transport=os.getenv("MCP_TRANSPORT", "stdio"),
             mcp_port=int(os.getenv("MCP_PORT", "8090")),
             log_level=os.getenv("LOG_LEVEL", "INFO"),
+            rrf_k=int(os.getenv("RRF_K", "60")),
+            rrf_weight_vec=float(os.getenv("RRF_WEIGHT_VEC", "0.7")),
+            rrf_weight_fts=float(os.getenv("RRF_WEIGHT_FTS", "0.3")),
+            rrf_pool_size=int(os.getenv("RRF_POOL_SIZE", "20")),
         )
 
     def validate(self):
         self.router.validate()
         self.chroma.validate()
+        self.fts.validate()

@@ -3,7 +3,7 @@ from pathlib import Path
 import tempfile
 import shutil
 
-from memorymesh.config import AppConfig, RouterConfig, ChromaConfig
+from memorymesh.config import AppConfig, RouterConfig, ChromaConfig, FTSConfig
 from memorymesh.router import RouterClient
 from memorymesh.memory.chroma_impl import ChromaMemoryBackend
 from memorymesh.memory.manager import MemoryManager
@@ -28,10 +28,19 @@ def chroma_config():
 
 
 @pytest.fixture
-def app_config(router_config, chroma_config):
+def fts_config():
+    tmp_file = Path(tempfile.mktemp(suffix="_fts_test.db"))
+    yield FTSConfig(db_path=str(tmp_file))
+    if tmp_file.exists():
+        tmp_file.unlink()
+
+
+@pytest.fixture
+def app_config(router_config, chroma_config, fts_config):
     return AppConfig(
         router=router_config,
         chroma=chroma_config,
+        fts=fts_config,
         embedding_model="paraphrase-multilingual-MiniLM-L12-v2",
         default_user_id="test_user",
         log_level="DEBUG",

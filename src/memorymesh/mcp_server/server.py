@@ -7,7 +7,7 @@ from mcp.types import Tool, TextContent
 
 from ..config import AppConfig
 from ..router import RouterClient
-from ..memory.chroma_impl import ChromaMemoryBackend
+from ..memory.hybrid_backend import HybridBackend
 from ..memory.manager import MemoryManager
 from ..logging_ import setup_logging
 from .tools import TOOLS
@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 class MemoryMeshServer:
     def __init__(self, config: AppConfig):
         self.config = config
-        self.backend = ChromaMemoryBackend(config.chroma.db_path)
+        self.backend = HybridBackend(config)
         self.router = RouterClient(config.router)
         self.manager = MemoryManager(config, self.backend, self.router)
         self.handlers = ToolHandlers(self.manager)
@@ -46,6 +46,7 @@ class MemoryMeshServer:
             return [TextContent(type="text", text=str(result))]
 
     async def run_stdio(self):
+        await self.backend.initialize()
         async with stdio_server() as (read_stream, write_stream):
             await self.mcp_server.run(
                 read_stream,
@@ -55,11 +56,12 @@ class MemoryMeshServer:
 
     def run(self):
         loop = asyncio.get_event_loop()
-        # Graceful shutdown on Windows (cần tự bắt KeyboardInterrupt)
         try:
             asyncio.run(self.run_stdio())
         except KeyboardInterrupt:
             logger.info("Server stopped by user")
+        finally:
+            asyncio.run(self.backend.close())
 
 def main():
     config = AppConfig.from_env()

@@ -90,7 +90,7 @@ class MemoryManager:
         """Recall memories with token budget."""
         user_id = user_id or self.config.default_user_id
         embedding = await get_embedding(query, self.config.embedding_model)
-        results = await self.backend.search(embedding, user_id, top_k)
+        results = await self.backend.search(embedding, user_id, top_k, query_text=query)
 
         # Token budget: cắt bớt nội dung nếu cần
         limited_results = []
