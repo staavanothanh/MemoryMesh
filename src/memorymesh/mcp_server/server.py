@@ -67,6 +67,8 @@ class MemoryMeshServer:
     async def _initialize(self):
         await self.backend.initialize()
         await self.session_store.initialize()
+        if self.config.instinct.enabled:
+            await self.manager.instinct_store.initialize()
         if self.config.session.auto_create_session:
             active = await self.session_store.get_active_session(self.config.default_user_id)
             if active:
@@ -89,6 +91,10 @@ class MemoryMeshServer:
             await self.session_store.close()
         except Exception as e:
             logger.warning("Session store close error: %s", e)
+        try:
+            await self.manager.instinct_store.close()
+        except Exception as e:
+            logger.warning("Instinct store close error: %s", e)
         logger.info("Shutdown complete")
 
     async def run_stdio(self):

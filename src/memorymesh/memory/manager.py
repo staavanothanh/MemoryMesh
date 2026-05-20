@@ -13,6 +13,8 @@ from ..schemas import MemoryRecord, SearchResult
 from ..hooks import HookRegistry
 from .backend import MemoryBackend
 from .consolidation import ConsolidationEngine
+from .instinct_store import InstinctStore
+from .instinct import InstinctEngine
 from ..prompts import EXTRACT_METADATA_PROMPT
 
 logger = logging.getLogger(__name__)
@@ -32,6 +34,8 @@ class MemoryManager:
         self._write_lock = asyncio.Lock()
         self._tokenizer = tiktoken.get_encoding("cl100k_base")  # phù hợp DeepSeek
         self._consolidator = ConsolidationEngine(config, backend, router)
+        self.instinct_store = InstinctStore(config.instinct.db_path)
+        self.instinct_engine = InstinctEngine(config, backend, self.instinct_store)
 
     async def add_memory(
         self,
@@ -41,7 +45,7 @@ class MemoryManager:
         user_id: str = None,
         level: str = "user",
     ) -> str:
-        """Add a memory with fast path and background enrichment."""
+        """Add a memory with fast path, instinct suggestions, and background enrichment."""
         user_id = user_id or self.config.default_user_id
         if level not in ("user", "session", "knowledge"):
             raise ValidationError("level must be one of: user, session, knowledge")
@@ -49,6 +53,19 @@ class MemoryManager:
             raise ValidationError(f"Memory content exceeds max length {self.config.max_memory_length}")
         if importance < 1 or importance > 5:
             raise ValidationError("Importance must be between 1 and 5")
+
+        # Apply instinct suggestions for tags
+        if tags is None:
+            tags = []
+        if self.config.instinct.enabled:
+            try:
+                suggestions = await self.instinct_engine.apply_instincts(user_id, text, tags)
+                for s in suggestions.get("suggested_tags", []):
+                    if s["tag"] not in tags and s["confidence"] > 0.5:
+                        tags.append(s["tag"])
+                        asyncio.create_task(self.instinct_engine.reinforce_instinct(s["instinct_id"], success=True))
+            except Exception as e:
+                logger.warning("Instinct suggestion failed: %s", e)
 
         embedding = await get_embedding(text, self.config.embedding_model)
 
@@ -64,6 +81,10 @@ class MemoryManager:
                 level=level,
             )
         logger.info("Memory saved: %s", memory_id)
+
+        # Background instinct learning (non-blocking)
+        if self.config.instinct.enabled:
+            asyncio.create_task(self._maybe_learn_instincts(user_id))
 
         # Background enrichment (non-blocking)
         asyncio.create_task(self._enrich_memory(memory_id, text, user_id))
@@ -119,6 +140,13 @@ class MemoryManager:
                 logger.info("Fact contradiction resolved %d groups for user %s", resolved, user_id)
         except Exception as e:
             logger.error("Fact consolidation failed for user %s: %s", user_id, e)
+
+    async def _maybe_learn_instincts(self, user_id: str):
+        """Run instinct learning, non-blocking."""
+        try:
+            await self.instinct_engine.learn_from_recent(user_id)
+        except Exception as e:
+            logger.warning("Instinct learning failed for user %s: %s", user_id, e)
 
     @staticmethod
     def _recency_score(timestamp_str: str) -> float:

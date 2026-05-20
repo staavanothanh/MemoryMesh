@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal
 import os
 from dotenv import load_dotenv
@@ -61,12 +61,24 @@ class ConsolidationConfig:
 
 
 @dataclass
+class InstinctConfig:
+    db_path: str = "./db/instincts.db"
+    enabled: bool = True
+    min_samples: int = 5
+
+    def validate(self):
+        import os
+        os.makedirs(os.path.dirname(self.db_path) or ".", exist_ok=True)
+
+
+@dataclass
 class AppConfig:
     router: RouterConfig
     chroma: ChromaConfig
     fts: FTSConfig
     session: SessionConfig
     consolidation: ConsolidationConfig
+    instinct: InstinctConfig = field(default_factory=InstinctConfig)
     level_weight_session: float = 2.0
     level_weight_user: float = 1.5
     level_weight_knowledge: float = 1.0
@@ -111,6 +123,11 @@ class AppConfig:
                 compact_threshold=int(os.getenv("SESSION_COMPACT_THRESHOLD", "20")),
                 max_context_log=int(os.getenv("SESSION_MAX_CONTEXT_LOG", "500")),
             ),
+            instinct=InstinctConfig(
+                db_path=os.getenv("INSTINCT_DB_PATH", "./db/instincts.db"),
+                enabled=os.getenv("INSTINCT_ENABLED", "true").lower() == "true",
+                min_samples=int(os.getenv("INSTINCT_MIN_SAMPLES", "5")),
+            ),
             consolidation=ConsolidationConfig(
                 similarity_threshold=float(os.getenv("CONSOLIDATION_SIMILARITY", "0.85")),
                 min_cluster_size=int(os.getenv("CONSOLIDATION_MIN_CLUSTER", "2")),
@@ -142,3 +159,4 @@ class AppConfig:
         self.fts.validate()
         self.session.validate()
         self.consolidation.validate()
+        self.instinct.validate()
