@@ -13,6 +13,8 @@ logger = logging.getLogger(__name__)
 
 
 class RouterClient:
+    _semaphore = asyncio.Semaphore(3)
+
     def __init__(self, config: RouterConfig):
         self.config = config
         self._failure_count = 0
@@ -20,6 +22,10 @@ class RouterClient:
 
     async def call_llm(self, prompt: str, model: Optional[str] = None) -> str:
         """Call LLM via 9Router with retry and fallback."""
+        async with self._semaphore:
+            return await self._call_llm_impl(prompt, model)
+
+    async def _call_llm_impl(self, prompt: str, model: Optional[str] = None) -> str:
         model = model or self.config.default_model
         models_to_try = [model]
         if model != self.config.fallback_model:

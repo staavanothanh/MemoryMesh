@@ -50,7 +50,7 @@ class HybridBackend:
         query_text: Optional[str] = None,
         level_filter: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
-        pool = self._pool_size
+        pool = max(self._pool_size, top_k * 2)
 
         chroma_task = asyncio.create_task(
             self.chroma.search(embedding, user_id, pool, level_filter=level_filter)
@@ -67,13 +67,10 @@ class HybridBackend:
 
         vector_results = await chroma_task
 
-        valid_ids = {r["id"] for r in vector_results}
-        fts_filtered = [r for r in fts_results if r["id"] in valid_ids]
-
-        if not fts_filtered:
+        if not fts_results:
             return vector_results[:top_k]
 
-        return self.fuser.fuse(vector_results, fts_filtered, top_k=top_k)
+        return self.fuser.fuse(vector_results, fts_results, top_k=top_k)
 
     async def delete(self, memory_id: str) -> bool:
         success = await self.chroma.delete(memory_id)

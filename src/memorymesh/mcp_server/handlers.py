@@ -153,7 +153,7 @@ class ToolHandlers:
         try:
             results = await self.manager.search_memory(
                 query=args["query"],
-                top_k=args.get("top_k", 5),
+                top_k=args.get("top_k", 10),
                 user_id=args.get("user_id"),
             )
             await self._auto_log("assistant", f"Recalled {len(results)} memories for: {args['query'][:200]}", "recall", str(args), save_memory=True)
