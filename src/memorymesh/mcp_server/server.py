@@ -138,6 +138,10 @@ class MemoryMeshServer:
             await self.manager.instinct_store.close()
         except Exception as e:
             logger.warning("Instinct store close error: %s", e)
+        try:
+            await self.router.close()
+        except Exception as e:
+            logger.warning("Router close error: %s", e)
         logger.info("Shutdown complete")
 
     async def run_stdio(self):

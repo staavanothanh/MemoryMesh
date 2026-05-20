@@ -19,6 +19,10 @@ class RouterClient:
         self.config = config
         self._failure_count = 0
         self._last_failure_time = 0.0
+        self._client = httpx.AsyncClient(timeout=config.timeout_s)
+
+    async def close(self):
+        await self._client.aclose()
 
     async def call_llm(self, prompt: str, model: Optional[str] = None) -> str:
         """Call LLM via 9Router with retry and fallback."""
@@ -56,37 +60,34 @@ class RouterClient:
 
     async def _call(self, model: str, prompt: str) -> str:
         try:
-            async with httpx.AsyncClient(timeout=self.config.timeout_s) as client:
-                response = await client.post(
-                    f"{self.config.url}/chat/completions",
-                    json={
-                        "model": model,
-                        "messages": [{"role": "user", "content": prompt}],
-                    },
-                )
-                if response.status_code == 200:
-                    self._failure_count = 0
-                    raw_text = response.text
-                    logger.debug("LLM response (first 200 chars): %s", raw_text[:200])
+            response = await self._client.post(
+                f"{self.config.url}/chat/completions",
+                json={
+                    "model": model,
+                    "messages": [{"role": "user", "content": prompt}],
+                },
+            )
+            if response.status_code == 200:
+                self._failure_count = 0
+                raw_text = response.text
+                logger.debug("LLM response (first 200 chars): %s", raw_text[:200])
+                try:
+                    data = response.json()
+                    return data["choices"][0]["message"]["content"]
+                except (json.JSONDecodeError, KeyError, IndexError):
+                    decoder = json.JSONDecoder()
                     try:
-                        # Thử parse bình thường trước
-                        data = response.json()
+                        data, _ = decoder.raw_decode(raw_text)
                         return data["choices"][0]["message"]["content"]
-                    except (json.JSONDecodeError, KeyError, IndexError):
-                        # Nếu lỗi, thử parse object JSON đầu tiên trong chuỗi
-                        decoder = json.JSONDecoder()
-                        try:
-                            data, _ = decoder.raw_decode(raw_text)
-                            return data["choices"][0]["message"]["content"]
-                        except (json.JSONDecodeError, KeyError, IndexError) as e2:
-                            raise RouterError(
-                                model, 0,
-                                Exception(f"JSON parse error: {e2}. Raw (500 chars): {raw_text[:500]}")
-                            )
-                else:
-                    raise RouterError(
-                        model, 0, Exception(f"HTTP {response.status_code}: {response.text[:200]}")
-                    )
+                    except (json.JSONDecodeError, KeyError, IndexError) as e2:
+                        raise RouterError(
+                            model, 0,
+                            Exception(f"JSON parse error: {e2}. Raw (500 chars): {raw_text[:500]}")
+                        )
+            else:
+                raise RouterError(
+                    model, 0, Exception(f"HTTP {response.status_code}: {response.text[:200]}")
+                )
         except httpx.TimeoutException as e:
             raise RouterError(model, 0, e)
         except httpx.ConnectError as e:

@@ -15,6 +15,9 @@ build/
 # ChromaDB data (local database files)
 db/
 
+# Workspace-specific opencode data (per-workspace isolation)
+.opencode/data/
+
 # Environment variables (contains API keys, tokens)
 .env
 

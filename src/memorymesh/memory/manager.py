@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import time
 from datetime import datetime, timezone
 from typing import List, Optional
 
@@ -36,6 +37,32 @@ class MemoryManager:
         self._consolidator = ConsolidationEngine(config, backend, router)
         self.instinct_store = InstinctStore(config.instinct.db_path)
         self.instinct_engine = InstinctEngine(config, backend, self.instinct_store)
+        self._last_consolidation: dict[str, float] = {}
+        self._last_fact_resolution: dict[str, float] = {}
+
+    @staticmethod
+    def _is_workspace_visible(memory_path: Optional[str], current_path: str) -> bool:
+        """Hierarchical workspace visibility.
+
+        Rules:
+        - Same path: visible
+        - Siblings (same parent): visible
+        - Current is ancestor of memory (downward): visible
+        - Otherwise: not visible
+        - Legacy memories (no path): visible from everywhere
+        """
+        if not memory_path:
+            return True
+        normalized_mem = memory_path.replace("\\", "/").rstrip("/")
+        normalized_cur = current_path.replace("\\", "/").rstrip("/")
+        if normalized_mem == normalized_cur:
+            return True
+        if normalized_mem.startswith(normalized_cur + "/"):
+            return True
+        import os
+        if os.path.dirname(normalized_mem) == os.path.dirname(normalized_cur):
+            return True
+        return False
 
     async def add_memory(
         self,
@@ -44,6 +71,7 @@ class MemoryManager:
         importance: int = 3,
         user_id: str = None,
         level: str = "user",
+        workspace_path: Optional[str] = None,
     ) -> str:
         """Add a memory with fast path, instinct suggestions, and background enrichment."""
         user_id = user_id or self.config.default_user_id
@@ -73,6 +101,8 @@ class MemoryManager:
             metadata = {"importance": importance, "level": level}
             if tags:
                 metadata["tags"] = tags
+            if workspace_path:
+                metadata["workspace_path"] = workspace_path.replace("\\", "/").rstrip("/")
             memory_id = await self.backend.add(
                 user_id=user_id,
                 content=text,
@@ -82,16 +112,8 @@ class MemoryManager:
             )
         logger.info("Memory saved: %s", memory_id)
 
-        # Background instinct learning (non-blocking)
-        if self.config.instinct.enabled:
-            asyncio.create_task(self._maybe_learn_instincts(user_id))
-
-        # Background enrichment (non-blocking)
-        asyncio.create_task(self._enrich_memory(memory_id, text, user_id))
-
-        # Background consolidation check (non-blocking)
-        asyncio.create_task(self._maybe_consolidate(user_id))
-        asyncio.create_task(self._maybe_resolve_facts(user_id))
+        # Background tasks with rate-limiting
+        asyncio.create_task(self._run_background_tasks(memory_id, text, level, user_id))
 
         # Trigger post-tool hooks
         if self.hooks:
@@ -100,6 +122,30 @@ class MemoryManager:
             )
 
         return memory_id
+
+    async def _run_background_tasks(self, memory_id: str, text: str, level: str, user_id: str):
+        """Run background tasks with rate-limiting for expensive operations."""
+        now = time.monotonic()
+
+        # 1. Enrichment: skip for session-level (chat logs, auto-logs)
+        if level != "session":
+            asyncio.create_task(self._enrich_memory(memory_id, text, user_id))
+
+        # 2. Instinct learning: lightweight, no LLM
+        if self.config.instinct.enabled:
+            asyncio.create_task(self._maybe_learn_instincts(user_id))
+
+        # 3. Consolidation: rate-limited (max once per 60s per user)
+        last_c = self._last_consolidation.get(user_id, 0)
+        if now - last_c >= 60:
+            self._last_consolidation[user_id] = now
+            asyncio.create_task(self._maybe_consolidate(user_id))
+
+        # 4. Fact resolution: rate-limited (max once per 120s per user)
+        last_f = self._last_fact_resolution.get(user_id, 0)
+        if now - last_f >= 120:
+            self._last_fact_resolution[user_id] = now
+            asyncio.create_task(self._maybe_resolve_facts(user_id))
 
     async def _enrich_memory(self, memory_id: str, text: str, user_id: str):
         """Call LLM to get tags, importance, summary and update memory metadata."""
@@ -182,13 +228,25 @@ class MemoryManager:
         top_k: int = 5,
         user_id: str = None,
         level_filter: Optional[List[str]] = None,
+        workspace_path: Optional[str] = None,
     ) -> List[SearchResult]:
         """Recall with smart truncation and level-aware weighting."""
         user_id = user_id or self.config.default_user_id
+
         embedding = await get_embedding(query, self.config.embedding_model)
         results = await self.backend.search(
-            embedding, user_id, top_k, query_text=query, level_filter=level_filter,
+            embedding, user_id, top_k, query_text=query,
+            level_filter=level_filter,
         )
+
+        # Hierarchical workspace filter: siblings and children visible, parent invisible
+        if workspace_path:
+            results = [
+                m for m in results
+                if self._is_workspace_visible(
+                    m.get("metadata", {}).get("workspace_path"), workspace_path
+                )
+            ]
 
         # Level-weighted scoring when no filter: boost session > user > knowledge
         if not level_filter:

@@ -1,0 +1,25 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "memorymesh": {
+      "type": "local",
+      "command": [
+        "D:\\Learning_Programing\\MemoryMesh\\memory-mesh\\memory-mesh-env\\Scripts\\python.exe",
+        "D:\\Learning_Programing\\MemoryMesh\\memory-mesh\\src\\memorymesh\\main.py"
+      ],
+      "environment": {
+        "ROUTER_URL": "http://127.0.0.1:20128/v1",
+        "DEFAULT_MODEL": "ds/deepseek-v4-flash",
+        "FALLBACK_MODEL": "ds/deepseek-v4-pro",
+        "EMBEDDING_MODEL": "paraphrase-multilingual-MiniLM-L12-v2",
+        "CHROMA_DB_PATH": "D:\\Learning_Programing\\MemoryMesh\\memory-mesh\\.opencode\\data\\chroma",
+        "FTS_DB_PATH": "D:\\Learning_Programing\\MemoryMesh\\memory-mesh\\.opencode\\data\\memory_fts.db",
+        "SESSION_DB_PATH": "D:\\Learning_Programing\\MemoryMesh\\memory-mesh\\.opencode\\data\\sessions.db",
+        "DEFAULT_USER_ID": "Shinn",
+        "MCP_TRANSPORT": "stdio",
+        "LOG_LEVEL": "INFO"
+      },
+      "enabled": true
+    }
+  }
+}

@@ -21,9 +21,21 @@ class ToolHandlers:
 
     async def set_session(self, session_id: str):
         self._current_session_id = session_id
+        self._cached_workspace = None
 
     async def get_current_session_id(self) -> str:
         return self._current_session_id
+
+    async def _get_workspace_path(self) -> str:
+        if not hasattr(self, '_cached_workspace'):
+            self._cached_workspace = None
+        if self._cached_workspace is None and self._current_session_id:
+            session = await self.session_store.get_session(self._current_session_id)
+            if session:
+                self._cached_workspace = session.get("workspace_path", "") or ""
+            else:
+                self._cached_workspace = ""
+        return self._cached_workspace or ""
 
     async def _auto_log(self, role: str, content: str, tool_name: str = "", tool_args: str = "", save_memory: bool = False):
         if self._current_session_id:
@@ -39,6 +51,7 @@ class ToolHandlers:
                         importance=4 if tool_name else 3,
                         level="session",
                         user_id=self.manager.config.default_user_id,
+                        workspace_path=await self._get_workspace_path(),
                     )
             except Exception as e:
                 logger.warning("Auto-log failed: %s", e)
@@ -59,6 +72,7 @@ class ToolHandlers:
                 importance=4,
                 level="knowledge",
                 user_id=user_id or self.manager.config.default_user_id,
+                workspace_path=path,
             )
             logger.info("Codebase auto-scanned: %d entries, memory=%s", len(snapshot.get("tree", [])), memory_id)
         except Exception as e:
@@ -74,6 +88,7 @@ class ToolHandlers:
                 top_k=max_items,
                 user_id=uid,
                 level_filter=["knowledge", "user"],
+                workspace_path=await self._get_workspace_path(),
             )
             if results:
                 summary = "\n".join(f"- [{r['importance']}] {r['content'][:200]}" for r in results)
@@ -109,6 +124,7 @@ class ToolHandlers:
                 importance=4,
                 level="knowledge",
                 user_id=uid,
+                workspace_path=await self._get_workspace_path(),
             )
             logger.info("Session compacted: %s -> memory=%s", session_id, memory_id)
         except Exception as e:
@@ -128,6 +144,7 @@ class ToolHandlers:
                     importance=importance,
                     level="knowledge",
                     user_id=uid,
+                    workspace_path=await self._get_workspace_path(),
                 )
             if facts:
                 logger.info("Saved %d atomic facts from conversation", len(facts))
@@ -135,6 +152,7 @@ class ToolHandlers:
             logger.warning("Atomic fact extraction background task failed: %s", e)
 
     async def handle_remember(self, args: dict) -> dict:
+        wp = await self._get_workspace_path()
         try:
             memory_id = await self.manager.add_memory(
                 text=args["content"],
@@ -142,6 +160,7 @@ class ToolHandlers:
                 importance=args.get("importance", 3),
                 level=args.get("level", "user"),
                 user_id=args.get("user_id"),
+                workspace_path=wp if wp else args.get("workspace_path"),
             )
             await self._auto_log("assistant", f"Saved memory: {args['content'][:200]}", "remember", str(args))
             return {"status": "success", "data": {"id": memory_id}}
@@ -150,11 +169,13 @@ class ToolHandlers:
             return {"status": "error", "error": str(e)}
 
     async def handle_recall(self, args: dict) -> dict:
+        wp = args.get("workspace_path") or await self._get_workspace_path()
         try:
             results = await self.manager.search_memory(
                 query=args["query"],
                 top_k=args.get("top_k", 10),
                 user_id=args.get("user_id"),
+                workspace_path=wp,
             )
             await self._auto_log("assistant", f"Recalled {len(results)} memories for: {args['query'][:200]}", "recall", str(args), save_memory=True)
             # Format as atomic fact bullets for clarity
@@ -208,6 +229,7 @@ class ToolHandlers:
                 importance=5,
                 level="session",
                 user_id=user_id,
+                workspace_path=await self._get_workspace_path(),
             )
             return {"status": "success", "data": {"session_id": self._current_session_id, "memory_id": memory_id}}
         except MemoryMeshError as e:
@@ -228,6 +250,7 @@ class ToolHandlers:
                 importance=3,
                 level="session",
                 user_id=user_id,
+                workspace_path=await self._get_workspace_path(),
             )
             # Extract atomic facts in background (non-blocking)
             asyncio.create_task(self._extract_and_save_facts(combined, user_id))
@@ -281,6 +304,7 @@ class ToolHandlers:
                     importance=5,
                     level="session",
                     user_id=user_id,
+                    workspace_path=workspace_path,
                 )
             else:
                 memory_id = None
@@ -367,6 +391,7 @@ class ToolHandlers:
                 importance=4,
                 level="session",
                 user_id=user_id,
+                workspace_path=workspace_path,
             )
             await self._auto_log("assistant", f"Workspace snapshot saved", "save_workspace_context", str(args))
             return {"status": "success", "data": {"memory_id": memory_id, "snapshot": snapshot}}
@@ -392,6 +417,7 @@ class ToolHandlers:
                 query=recall_query,
                 top_k=top_k,
                 user_id=user_id,
+                workspace_path=await self._get_workspace_path(),
             )
 
             await self._auto_log("assistant", f"Resumed session {session_id}: {len(context)} messages, {len(memories)} memories", "resume_session", str(args), save_memory=True)
