@@ -10,6 +10,7 @@ from ..router import RouterClient
 from ..hooks import hooks as global_hooks
 from ..memory.hybrid_backend import HybridBackend
 from ..memory.manager import MemoryManager
+from ..memory.session_store import SessionStore
 from ..logging_ import setup_logging
 from .tools import TOOLS
 from .handlers import ToolHandlers
@@ -22,7 +23,8 @@ class MemoryMeshServer:
         self.backend = HybridBackend(config)
         self.router = RouterClient(config.router)
         self.manager = MemoryManager(config, self.backend, self.router, hooks=global_hooks)
-        self.handlers = ToolHandlers(self.manager)
+        self.session_store = SessionStore(config.session.db_path)
+        self.handlers = ToolHandlers(self.manager, self.session_store)
         self.mcp_server = Server("memorymesh")
         self._register_tools()
 
@@ -39,6 +41,10 @@ class MemoryMeshServer:
                 "forget": self.handlers.handle_forget,
                 "list_memories": self.handlers.handle_list_memories,
                 "ping": self.handlers.handle_ping,
+                "save_system_prompt": self.handlers.handle_save_system_prompt,
+                "save_context_pair": self.handlers.handle_save_context_pair,
+                "list_sessions": self.handlers.handle_list_sessions,
+                "get_session_context": self.handlers.handle_get_session_context,
             }
             handler = handler_map.get(name)
             if not handler:
@@ -48,6 +54,11 @@ class MemoryMeshServer:
 
     async def run_stdio(self):
         await self.backend.initialize()
+        await self.session_store.initialize()
+        if self.config.session.auto_create_session:
+            session_id = await self.session_store.create_session(self.config.default_user_id)
+            await self.handlers.set_session(session_id)
+            logger.info("Auto-created session: %s", session_id)
         async with stdio_server() as (read_stream, write_stream):
             await self.mcp_server.run(
                 read_stream,
@@ -63,6 +74,7 @@ class MemoryMeshServer:
             logger.info("Server stopped by user")
         finally:
             asyncio.run(self.backend.close())
+            asyncio.run(self.session_store.close())
 
 def main():
     config = AppConfig.from_env()

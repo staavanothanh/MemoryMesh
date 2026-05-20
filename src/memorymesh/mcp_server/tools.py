@@ -75,4 +75,52 @@ TOOLS = [
         description="Kiểm tra server còn sống.",
         inputSchema={"type": "object", "properties": {}},
     ),
+    Tool(
+        name="save_system_prompt",
+        description="Lưu system prompt của phiên làm việc hiện tại.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "system_prompt": {"type": "string", "description": "System prompt cần lưu"},
+                "user_id": {"type": "string", "description": "ID người dùng"},
+            },
+            "required": ["system_prompt"],
+        },
+    ),
+    Tool(
+        name="save_context_pair",
+        description="Lưu một cặp hội thoại (user message + assistant response) vào session.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "user_message": {"type": "string", "description": "Tin nhắn của user"},
+                "assistant_message": {"type": "string", "description": "Phản hồi của assistant"},
+                "user_id": {"type": "string", "description": "ID người dùng"},
+            },
+            "required": ["user_message", "assistant_message"],
+        },
+    ),
+    Tool(
+        name="list_sessions",
+        description="Liệt kê các session đã lưu.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "limit": {"type": "integer", "minimum": 1, "maximum": 100, "description": "Số lượng kết quả (mặc định 10)"},
+                "user_id": {"type": "string", "description": "ID người dùng"},
+            },
+        },
+    ),
+    Tool(
+        name="get_session_context",
+        description="Lấy toàn bộ context của một session cũ (system prompt + hội thoại).",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "session_id": {"type": "string", "description": "ID của session cần xem"},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 500, "description": "Số dòng context tối đa (mặc định 50)"},
+            },
+            "required": ["session_id"],
+        },
+    ),
 ]

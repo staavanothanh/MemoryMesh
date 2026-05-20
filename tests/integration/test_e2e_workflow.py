@@ -1,15 +1,25 @@
 import pytest
+import pytest_asyncio
 from unittest.mock import patch, AsyncMock
 
 from memorymesh.mcp_server.handlers import ToolHandlers
+from memorymesh.memory.session_store import SessionStore
 
 
 SAMPLE_EMBEDDING = [0.1] * 384
 
 
+@pytest_asyncio.fixture
+async def session_store(session_config):
+    store = SessionStore(session_config.db_path)
+    await store.initialize()
+    yield store
+    await store.close()
+
+
 @pytest.mark.asyncio
-async def test_full_workflow(memory_manager):
-    handlers = ToolHandlers(memory_manager)
+async def test_full_workflow(memory_manager, session_store):
+    handlers = ToolHandlers(memory_manager, session_store)
 
     with patch("memorymesh.memory.manager.get_embedding", new=AsyncMock(return_value=SAMPLE_EMBEDDING)):
         with patch("memorymesh.memory.manager.MemoryManager._enrich_memory", new=AsyncMock()):
@@ -67,8 +77,8 @@ async def test_full_workflow(memory_manager):
 
 
 @pytest.mark.asyncio
-async def test_multiple_users_isolation(memory_manager):
-    handlers = ToolHandlers(memory_manager)
+async def test_multiple_users_isolation(memory_manager, session_store):
+    handlers = ToolHandlers(memory_manager, session_store)
 
     with patch("memorymesh.memory.manager.get_embedding", new=AsyncMock(return_value=SAMPLE_EMBEDDING)):
         with patch("memorymesh.memory.manager.MemoryManager._enrich_memory", new=AsyncMock()):

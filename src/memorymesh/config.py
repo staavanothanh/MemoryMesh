@@ -33,6 +33,17 @@ class FTSConfig:
 
 
 @dataclass
+class SessionConfig:
+    db_path: str = "./db/sessions.db"
+    auto_create_session: bool = True
+    max_context_log: int = 500
+
+    def validate(self):
+        import os
+        os.makedirs(os.path.dirname(self.db_path) or ".", exist_ok=True)
+
+
+@dataclass
 class ConsolidationConfig:
     similarity_threshold: float = 0.85
     min_cluster_size: int = 2
@@ -50,6 +61,7 @@ class AppConfig:
     router: RouterConfig
     chroma: ChromaConfig
     fts: FTSConfig
+    session: SessionConfig
     consolidation: ConsolidationConfig
     level_weight_session: float = 2.0
     level_weight_user: float = 1.5
@@ -86,6 +98,11 @@ class AppConfig:
             fts=FTSConfig(
                 db_path=os.getenv("FTS_DB_PATH", "./db/memory_fts.db"),
             ),
+            session=SessionConfig(
+                db_path=os.getenv("SESSION_DB_PATH", "./db/sessions.db"),
+                auto_create_session=os.getenv("SESSION_AUTO_CREATE", "true").lower() == "true",
+                max_context_log=int(os.getenv("SESSION_MAX_CONTEXT_LOG", "500")),
+            ),
             consolidation=ConsolidationConfig(
                 similarity_threshold=float(os.getenv("CONSOLIDATION_SIMILARITY", "0.85")),
                 min_cluster_size=int(os.getenv("CONSOLIDATION_MIN_CLUSTER", "2")),
@@ -115,4 +132,5 @@ class AppConfig:
         self.router.validate()
         self.chroma.validate()
         self.fts.validate()
+        self.session.validate()
         self.consolidation.validate()

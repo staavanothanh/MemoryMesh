@@ -1,16 +1,26 @@
 import pytest
+import pytest_asyncio
 from unittest.mock import patch, AsyncMock
 
 from memorymesh.mcp_server.handlers import ToolHandlers
+from memorymesh.memory.session_store import SessionStore
 from memorymesh.config import AppConfig
 
 
 SAMPLE_EMBEDDING = [0.1] * 384
 
 
-@pytest.fixture
-def handlers(memory_manager):
-    return ToolHandlers(memory_manager)
+@pytest_asyncio.fixture
+async def session_store(session_config):
+    store = SessionStore(session_config.db_path)
+    await store.initialize()
+    yield store
+    await store.close()
+
+
+@pytest_asyncio.fixture
+async def handlers(memory_manager, session_store):
+    return ToolHandlers(memory_manager, session_store)
 
 
 @pytest.mark.asyncio
