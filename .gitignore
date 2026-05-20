@@ -31,4 +31,4 @@ Thumbs.db
 .DS_Store
 
 # Testing
-.pytest_cache/
+.pytest_cache/docs/plan.md
