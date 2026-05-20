@@ -70,8 +70,7 @@ class MemoryMeshServer:
             await self.handlers.set_session(session_id)
             if self.config.session.auto_scan_codebase:
                 await self.handlers._auto_scan_codebase(user_id=self.config.default_user_id)
-            if self.config.session.auto_recall_on_start:
-                await self.handlers._auto_recall_context(user_id=self.config.default_user_id)
+            # B1: No preload on startup — context starts empty, model calls recall when needed
         async with stdio_server() as (read_stream, write_stream):
             await self.mcp_server.run(
                 read_stream,

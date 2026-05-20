@@ -64,14 +64,14 @@ class ToolHandlers:
         except Exception as e:
             logger.warning("Codebase auto-scan failed: %s", e)
 
-    async def _auto_recall_context(self, user_id: str = ""):
+    async def _auto_recall_context(self, user_id: str = "", max_items: int = 3):
         if not self._current_session_id:
             return
         uid = user_id or self.manager.config.default_user_id
         try:
             results = await self.manager.search_memory(
                 query="session context project plan development",
-                top_k=10,
+                top_k=max_items,
                 user_id=uid,
                 level_filter=["knowledge", "user"],
             )
@@ -157,7 +157,17 @@ class ToolHandlers:
                 user_id=args.get("user_id"),
             )
             await self._auto_log("assistant", f"Recalled {len(results)} memories for: {args['query'][:200]}", "recall", str(args), save_memory=True)
-            return {"status": "success", "data": results}
+            # Format as atomic fact bullets for clarity
+            formatted = []
+            for r in results:
+                tags = r.get("tags", []) or []
+                prefix = "📌" if "atomic_fact" in tags else "•"
+                formatted.append(f"{prefix} {r['content']} (relevance: {r['score']:.2f})")
+            return {
+                "status": "success",
+                "data": results,
+                "formatted": "\n".join(formatted) if formatted else "No relevant memories found.",
+            }
         except MemoryMeshError as e:
             logger.error("Recall failed: %s", e)
             return {"status": "error", "error": str(e)}

@@ -17,6 +17,15 @@ Conversation Log:
 
 Summary:"""
 
+RECALL_INSTRUCTION = """You have access to a long-term memory system via the `recall` tool. Important guidelines:
+
+1. **Context is empty at session start.** Do NOT expect any preloaded context.
+2. **Recall on demand.** Only call `recall(query)` when the user's message requires information from past sessions.
+3. **Be specific.** Pass a precise, keyword-rich query to `recall` to get the most relevant atomic facts.
+4. **Facts are atomic.** The `recall` tool returns short, standalone facts — not full conversation logs.
+5. **You decide.** If you don't need past context, answer normally without calling recall.
+6. **Trust the facts.** Recalled facts have been extracted and verified from past conversations. Use them as reliable context."""
+
 ATOMIC_FACT_EXTRACT_PROMPT = """You are an atomic fact extractor. Below is a conversation between a user and an AI assistant. Extract all standalone, independent facts from this conversation.
 
 Rules:
