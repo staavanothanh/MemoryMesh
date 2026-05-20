@@ -75,8 +75,7 @@ class MemoryMeshServer:
 
     def _init_options(self):
         opts = self.mcp_server.create_initialization_options()
-        import dataclasses
-        return dataclasses.replace(opts, instructions=RECALL_INSTRUCTION)
+        return opts.model_copy(update={"instructions": RECALL_INSTRUCTION})
 
     def _register_tools(self):
         @self.mcp_server.list_tools()
@@ -149,13 +148,12 @@ class MemoryMeshServer:
     async def run_stdio(self):
         await self._initialize_fast()
         async with stdio_server() as (read_stream, write_stream):
-            slow_task = asyncio.create_task(self._initialize_slow())
+            asyncio.create_task(self._initialize_slow())
             await self.mcp_server.run(
                 read_stream,
                 write_stream,
                 self._init_options(),
             )
-            slow_task.cancel()
 
     async def run_sse(self):
         await self._initialize_fast()
