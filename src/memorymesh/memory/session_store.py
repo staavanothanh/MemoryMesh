@@ -18,6 +18,17 @@ class SessionStore:
         self.db_path = db_path
         self._db: Optional[aiosqlite.Connection] = None
 
+    _REQUIRED_SESSION_COLUMNS = {
+        "session_id": "session_id TEXT PRIMARY KEY",
+        "user_id": "user_id TEXT NOT NULL",
+        "system_prompt": "system_prompt TEXT DEFAULT ''",
+        "workspace_path": "workspace_path TEXT DEFAULT ''",
+        "status": "status TEXT NOT NULL DEFAULT 'active'",
+        "created_at": "created_at TEXT NOT NULL",
+        "updated_at": "updated_at TEXT NOT NULL",
+        "ended_at": "ended_at TEXT DEFAULT NULL",
+    }
+
     async def initialize(self):
         self._db = await aiosqlite.connect(self.db_path)
         self._db.row_factory = aiosqlite.Row
@@ -56,7 +67,23 @@ class SessionStore:
                 FOREIGN KEY (session_id) REFERENCES sessions(session_id)
             )
         """)
+        await self._migrate_sessions_schema()
         await self._db.commit()
+
+    async def _migrate_sessions_schema(self):
+        """Add missing columns to the sessions table if schema has changed."""
+        cursor = await self._db.execute("PRAGMA table_info(sessions)")
+        existing = {row["name"] for row in await cursor.fetchall()}
+        to_add = []
+        for col_name, col_def in self._REQUIRED_SESSION_COLUMNS.items():
+            if col_name not in existing:
+                to_add.append(f"ALTER TABLE sessions ADD COLUMN {col_def}")
+        for stmt in to_add:
+            try:
+                await self._db.execute(stmt)
+                logger.info("Schema migration: %s", stmt)
+            except Exception as e:
+                logger.warning("Schema migration failed for %s: %s", stmt, e)
 
     async def close(self):
         if self._db:
