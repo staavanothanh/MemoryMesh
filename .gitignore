@@ -32,3 +32,5 @@ Thumbs.db
 
 # Testing
 .pytest_cache/docs/plan.md
+
+docs/plan/
