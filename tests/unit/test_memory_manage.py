@@ -1,4 +1,5 @@
 import pytest
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, patch, MagicMock
 
 from memorymesh.memory.manager import MemoryManager
@@ -150,3 +151,36 @@ async def test_search_memory_token_budget(memory_manager):
         user_id="test_user",
     )
     assert len(results) >= 1
+
+
+class TestRecencyScore:
+    def test_recent_is_high(self, memory_manager):
+        now = datetime.now(timezone.utc).isoformat()
+        score = memory_manager._recency_score(now)
+        assert score > 0.9
+
+    def test_old_is_low(self, memory_manager):
+        old = datetime(2020, 1, 1, tzinfo=timezone.utc).isoformat()
+        score = memory_manager._recency_score(old)
+        assert score < 0.01
+
+    def test_invalid_returns_zero(self, memory_manager):
+        assert memory_manager._recency_score("garbage") == 0.0
+        assert memory_manager._recency_score("") == 0.0
+
+    def test_future_does_not_overflow(self, memory_manager):
+        future = datetime(2099, 1, 1, tzinfo=timezone.utc).isoformat()
+        score = memory_manager._recency_score(future)
+        assert 0.0 <= score <= 1.0
+
+
+class TestFinalScore:
+    def test_higher_importance_scores_better(self, memory_manager):
+        low = {"score": 0.5, "metadata": {"importance": 1, "timestamp": ""}}
+        high = {"score": 0.5, "metadata": {"importance": 5, "timestamp": ""}}
+        assert memory_manager._compute_final_score(high) > memory_manager._compute_final_score(low)
+
+    def test_higher_fusion_scores_better(self, memory_manager):
+        low = {"score": 0.3, "metadata": {"importance": 3, "timestamp": ""}}
+        high = {"score": 0.9, "metadata": {"importance": 3, "timestamp": ""}}
+        assert memory_manager._compute_final_score(high) > memory_manager._compute_final_score(low)

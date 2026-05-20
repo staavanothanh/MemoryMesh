@@ -61,6 +61,10 @@ class AppConfig:
     rrf_weight_vec: float = 0.7
     rrf_weight_fts: float = 0.3
     rrf_pool_size: int = 20
+    token_budget: int = 1000
+    truncation_weight_score: float = 0.6
+    truncation_weight_importance: float = 0.3
+    truncation_weight_recency: float = 0.1
 
     @staticmethod
     def from_env() -> "AppConfig":
@@ -95,6 +99,10 @@ class AppConfig:
             rrf_weight_vec=float(os.getenv("RRF_WEIGHT_VEC", "0.7")),
             rrf_weight_fts=float(os.getenv("RRF_WEIGHT_FTS", "0.3")),
             rrf_pool_size=int(os.getenv("RRF_POOL_SIZE", "20")),
+            token_budget=int(os.getenv("TOKEN_BUDGET", "1000")),
+            truncation_weight_score=float(os.getenv("TRUNCATION_WEIGHT_SCORE", "0.6")),
+            truncation_weight_importance=float(os.getenv("TRUNCATION_WEIGHT_IMPORTANCE", "0.3")),
+            truncation_weight_recency=float(os.getenv("TRUNCATION_WEIGHT_RECENCY", "0.1")),
         )
 
     def validate(self):

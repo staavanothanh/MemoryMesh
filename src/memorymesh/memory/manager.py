@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from datetime import datetime, timezone
 from typing import List, Optional
 
 import tiktoken
@@ -15,8 +16,6 @@ from .consolidation import ConsolidationEngine
 from ..prompts import EXTRACT_METADATA_PROMPT
 
 logger = logging.getLogger(__name__)
-
-MAX_RECALL_TOKENS = 1000  # Token budget for recall results
 
 class MemoryManager:
     def __init__(
@@ -110,31 +109,59 @@ class MemoryManager:
         except Exception as e:
             logger.error("Consolidation failed for user %s: %s", user_id, e)
 
+    @staticmethod
+    def _recency_score(timestamp_str: str) -> float:
+        """Compute recency score (0-1) decaying over ~1 day."""
+        try:
+            created = datetime.fromisoformat(timestamp_str)
+            hours_ago = (datetime.now(timezone.utc) - created).total_seconds() / 3600
+            return __import__("math").exp(-abs(hours_ago) / 24)
+        except (ValueError, TypeError, OverflowError):
+            return 0.0
+
+    def _compute_final_score(self, mem: dict) -> float:
+        w_s = self.config.truncation_weight_score
+        w_i = self.config.truncation_weight_importance
+        w_r = self.config.truncation_weight_recency
+
+        fusion_score = mem.get("score", 0.0)
+        importance = mem.get("metadata", {}).get("importance", 3) / 5.0
+        recency = self._recency_score(mem.get("metadata", {}).get("timestamp", ""))
+        return fusion_score * w_s + importance * w_i + recency * w_r
+
     async def search_memory(
         self,
         query: str,
         top_k: int = 5,
         user_id: str = None,
     ) -> List[SearchResult]:
-        """Recall memories with token budget."""
+        """Recall with smart truncation: score = fusion * 0.6 + importance * 0.3 + recency * 0.1."""
         user_id = user_id or self.config.default_user_id
         embedding = await get_embedding(query, self.config.embedding_model)
         results = await self.backend.search(embedding, user_id, top_k, query_text=query)
 
-        # Token budget: cắt bớt nội dung nếu cần
+        budget = self.config.token_budget
+
+        # Smart re-ranking
+        scored = [(self._compute_final_score(m), m) for m in results]
+        scored.sort(key=lambda x: x[0], reverse=True)
+
         limited_results = []
         total_tokens = 0
-        for mem in results:
-            tokens = len(self._tokenizer.encode(mem["content"]))
-            if total_tokens + tokens > MAX_RECALL_TOKENS:
-                # Cắt nội dung để vừa token budget
-                available = MAX_RECALL_TOKENS - total_tokens
-                truncated = self._tokenizer.decode(self._tokenizer.encode(mem["content"])[:available])
-                mem["content"] = truncated + "..."
-                limited_results.append(mem)
+        for _, mem in scored:
+            meta_str = str(mem.get("metadata", {}))
+            meta_tokens = len(self._tokenizer.encode(meta_str))
+            content_tokens = len(self._tokenizer.encode(mem["content"]))
+            mem_tokens = meta_tokens + content_tokens
+            if total_tokens + mem_tokens > budget:
+                available = budget - total_tokens
+                if available > 10:
+                    truncated = self._tokenizer.decode(self._tokenizer.encode(mem["content"])[:available])
+                    mem["content"] = truncated + "..."
+                    limited_results.append(mem)
                 break
             limited_results.append(mem)
-            total_tokens += tokens
+            total_tokens += mem_tokens
 
         return [
             SearchResult(
