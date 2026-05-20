@@ -44,14 +44,14 @@ class MemoryManager:
 
         # Fast path: store immediately
         async with self._write_lock:
+            metadata = {"importance": importance}
+            if tags:
+                metadata["tags"] = tags
             memory_id = await self.backend.add(
                 user_id=user_id,
                 content=text,
                 embedding=embedding,
-                metadata={
-                    "tags": tags or [],
-                    "importance": importance,
-                },
+                metadata=metadata,
             )
         logger.info("Memory saved: %s", memory_id)
 
@@ -66,10 +66,18 @@ class MemoryManager:
             response = await self.router.call_llm(prompt)
             import json
             meta = json.loads(response)
-            # Cập nhật metadata trong ChromaDB (sẽ cần phương thức update)
-            # Hiện tại ChromaDB chưa có update metadata dễ dàng, ta tạm lưu log
-            logger.info("Enrichment for %s: %s", memory_id, meta)
-            # Trong phiên bản đầy đủ sẽ gọi self.backend.update_metadata(memory_id, meta)
+            update = {}
+            if "tags" in meta and isinstance(meta["tags"], list):
+                update["tags"] = meta["tags"]
+            if "importance" in meta and isinstance(meta["importance"], int):
+                update["importance"] = meta["importance"]
+            if "summary" in meta and isinstance(meta["summary"], str):
+                update["summary"] = meta["summary"]
+            if update:
+                await self.backend.update_metadata(memory_id, update)
+                logger.info("Enrichment updated for %s: %s", memory_id, update)
+            else:
+                logger.info("Enrichment produced no usable fields for %s: %s", memory_id, meta)
         except Exception as e:
             logger.error("Enrichment failed for %s: %s", memory_id, e)
 

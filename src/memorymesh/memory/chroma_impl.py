@@ -42,6 +42,22 @@ class ChromaMemoryBackend:
         self._log_action("add", memory_id, user_id, content)
         return memory_id
 
+    async def update_metadata(self, memory_id: str, metadata: Dict[str, Any]) -> bool:
+        """Update metadata for an existing memory (merge with existing)."""
+        try:
+            existing = self.memories.get(ids=[memory_id])
+            if not existing["ids"]:
+                logger.warning("Memory %s not found for metadata update", memory_id)
+                return False
+            existing_meta = existing["metadatas"][0] or {}
+            existing_meta.update(metadata)
+            self.memories.update(ids=[memory_id], metadatas=[existing_meta])
+            logger.info("Metadata updated for memory %s: %s", memory_id, metadata)
+            return True
+        except Exception as e:
+            logger.error("Metadata update failed for %s: %s", memory_id, e)
+            return False
+
     async def search(
         self,
         embedding: List[float],

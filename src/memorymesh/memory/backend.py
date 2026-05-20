@@ -26,6 +26,10 @@ class MemoryBackend(Protocol):
         """Remove a memory by ID."""
         ...
 
+    async def update_metadata(self, memory_id: str, metadata: Dict[str, Any]) -> bool:
+        """Update metadata for an existing memory."""
+        ...
+
     async def list_all(
         self, user_id: str, limit: int = 100, offset: int = 0
     ) -> List[Dict[str, Any]]:

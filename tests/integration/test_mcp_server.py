@@ -1,0 +1,97 @@
+import pytest
+from unittest.mock import patch, AsyncMock
+
+from memorymesh.mcp_server.handlers import ToolHandlers
+from memorymesh.config import AppConfig
+
+
+SAMPLE_EMBEDDING = [0.1] * 384
+
+
+@pytest.fixture
+def handlers(memory_manager):
+    return ToolHandlers(memory_manager)
+
+
+@pytest.mark.asyncio
+async def test_handle_ping(handlers):
+    result = await handlers.handle_ping({})
+    assert result["status"] == "success"
+    assert result["data"] == "pong"
+
+
+@pytest.mark.asyncio
+async def test_handle_remember(handlers):
+    with patch("memorymesh.memory.manager.get_embedding", new=AsyncMock(return_value=SAMPLE_EMBEDDING)):
+        with patch("memorymesh.memory.manager.MemoryManager._enrich_memory", new=AsyncMock()):
+            result = await handlers.handle_remember({
+                "content": "Integration test memory",
+                "tags": ["test"],
+                "importance": 3,
+                "user_id": "test_user",
+            })
+    assert result["status"] == "success"
+    assert "id" in result["data"]
+
+
+@pytest.mark.asyncio
+async def test_handle_remember_with_error(memory_manager, handlers):
+    from memorymesh.errors import ValidationError
+    with patch.object(memory_manager, "add_memory", new=AsyncMock(side_effect=ValidationError("Invalid input"))):
+        result = await handlers.handle_remember({
+            "content": "test",
+        })
+        assert result["status"] == "error"
+        assert "Invalid input" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_handle_recall(handlers):
+    with patch("memorymesh.memory.manager.get_embedding", new=AsyncMock(return_value=SAMPLE_EMBEDDING)):
+        with patch("memorymesh.memory.manager.MemoryManager._enrich_memory", new=AsyncMock()):
+            await handlers.handle_remember({
+                "content": "Hà Nội là thủ đô",
+                "user_id": "test_user",
+            })
+
+    with patch("memorymesh.memory.manager.get_embedding", new=AsyncMock(return_value=SAMPLE_EMBEDDING)):
+        result = await handlers.handle_recall({
+            "query": "thủ đô",
+            "top_k": 5,
+            "user_id": "test_user",
+        })
+    assert result["status"] == "success"
+    assert len(result["data"]) >= 1
+
+
+@pytest.mark.asyncio
+async def test_handle_forget(handlers):
+    with patch("memorymesh.memory.manager.get_embedding", new=AsyncMock(return_value=SAMPLE_EMBEDDING)):
+        with patch("memorymesh.memory.manager.MemoryManager._enrich_memory", new=AsyncMock()):
+            mem_result = await handlers.handle_remember({
+                "content": "To forget",
+                "user_id": "test_user",
+            })
+
+    memory_id = mem_result["data"]["id"]
+    result = await handlers.handle_forget({"memory_id": memory_id})
+    assert result["status"] == "success"
+    assert result["data"]["deleted"] is True
+
+
+@pytest.mark.asyncio
+async def test_handle_list_memories(handlers):
+    with patch("memorymesh.memory.manager.get_embedding", new=AsyncMock(return_value=SAMPLE_EMBEDDING)):
+        with patch("memorymesh.memory.manager.MemoryManager._enrich_memory", new=AsyncMock()):
+            await handlers.handle_remember({
+                "content": "List test",
+                "user_id": "test_user",
+            })
+
+    result = await handlers.handle_list_memories({
+        "limit": 10,
+        "offset": 0,
+        "user_id": "test_user",
+    })
+    assert result["status"] == "success"
+    assert len(result["data"]) >= 1
