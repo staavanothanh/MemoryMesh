@@ -36,6 +36,7 @@ class FTSConfig:
 class SessionConfig:
     db_path: str = "./db/sessions.db"
     auto_create_session: bool = True
+    auto_scan_codebase: bool = True
     max_context_log: int = 500
 
     def validate(self):
@@ -101,6 +102,7 @@ class AppConfig:
             session=SessionConfig(
                 db_path=os.getenv("SESSION_DB_PATH", "./db/sessions.db"),
                 auto_create_session=os.getenv("SESSION_AUTO_CREATE", "true").lower() == "true",
+                auto_scan_codebase=os.getenv("SESSION_AUTO_SCAN_CODEBASE", "true").lower() == "true",
                 max_context_log=int(os.getenv("SESSION_MAX_CONTEXT_LOG", "500")),
             ),
             consolidation=ConsolidationConfig(

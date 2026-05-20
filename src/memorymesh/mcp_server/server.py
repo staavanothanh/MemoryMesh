@@ -67,6 +67,8 @@ class MemoryMeshServer:
                 session_id = await self.session_store.create_session(self.config.default_user_id)
                 logger.info("Auto-created session: %s", session_id)
             await self.handlers.set_session(session_id)
+            if self.config.session.auto_scan_codebase:
+                await self.handlers._auto_scan_codebase(user_id=self.config.default_user_id)
         async with stdio_server() as (read_stream, write_stream):
             await self.mcp_server.run(
                 read_stream,

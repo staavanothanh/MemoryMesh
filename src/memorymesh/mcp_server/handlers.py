@@ -4,6 +4,7 @@ from typing import Optional
 from ..hooks import hooks as global_hooks
 from ..memory.manager import MemoryManager
 from ..memory.session_store import SessionStore
+from ..scanner import CodebaseScanner
 from ..errors import MemoryMeshError
 
 logger = logging.getLogger(__name__)
@@ -26,6 +27,27 @@ class ToolHandlers:
                 await self.session_store.log_context(self._current_session_id, role, content, tool_name, tool_args)
             except Exception as e:
                 logger.warning("Auto-log failed: %s", e)
+
+    async def _auto_scan_codebase(self, workspace_path: str = "", user_id: str = ""):
+        try:
+            path = workspace_path or self.manager.config.default_user_id
+            import os
+            if not path or path == self.manager.config.default_user_id:
+                path = os.getcwd()
+            scanner = CodebaseScanner(workspace_path=path)
+            snapshot = scanner.scan()
+            summary = snapshot.get("summary", "")
+            await self.session_store.save_workspace_snapshot(self._current_session_id, snapshot)
+            memory_id = await self.manager.add_memory(
+                text=f"[Codebase Snapshot] {summary}",
+                tags=["codebase", "workspace", "knowledge"],
+                importance=4,
+                level="knowledge",
+                user_id=user_id or self.manager.config.default_user_id,
+            )
+            logger.info("Codebase auto-scanned: %d entries, memory=%s", len(snapshot.get("tree", [])), memory_id)
+        except Exception as e:
+            logger.warning("Codebase auto-scan failed: %s", e)
 
     async def handle_remember(self, args: dict) -> dict:
         try:
@@ -163,6 +185,7 @@ class ToolHandlers:
                 )
             else:
                 memory_id = None
+            await self._auto_scan_codebase(workspace_path, user_id)
             await self._auto_log("assistant", f"New session created: {session_id}", "new_session", str(args))
             return {
                 "status": "success",
