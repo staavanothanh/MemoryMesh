@@ -21,10 +21,21 @@ class ToolHandlers:
     async def get_current_session_id(self) -> str:
         return self._current_session_id
 
-    async def _auto_log(self, role: str, content: str, tool_name: str = "", tool_args: str = ""):
+    async def _auto_log(self, role: str, content: str, tool_name: str = "", tool_args: str = "", save_memory: bool = False):
         if self._current_session_id:
             try:
                 await self.session_store.log_context(self._current_session_id, role, content, tool_name, tool_args)
+                if save_memory and role in ("user", "assistant") and content.strip():
+                    tags = ["conversation", "session", role]
+                    if tool_name:
+                        tags.append(tool_name)
+                    await self.manager.add_memory(
+                        text=f"[{role}] {content[:500]}",
+                        tags=tags,
+                        importance=4 if tool_name else 3,
+                        level="session",
+                        user_id=self.manager.config.default_user_id,
+                    )
             except Exception as e:
                 logger.warning("Auto-log failed: %s", e)
 
@@ -71,7 +82,7 @@ class ToolHandlers:
                 top_k=args.get("top_k", 5),
                 user_id=args.get("user_id"),
             )
-            await self._auto_log("assistant", f"Recalled {len(results)} memories for: {args['query'][:200]}", "recall", str(args))
+            await self._auto_log("assistant", f"Recalled {len(results)} memories for: {args['query'][:200]}", "recall", str(args), save_memory=True)
             return {"status": "success", "data": results}
         except MemoryMeshError as e:
             logger.error("Recall failed: %s", e)
@@ -123,8 +134,8 @@ class ToolHandlers:
             user_msg = args["user_message"]
             asst_msg = args["assistant_message"]
             combined = f"User: {user_msg}\nAssistant: {asst_msg}"
-            await self._auto_log("user", user_msg)
-            await self._auto_log("assistant", asst_msg)
+            await self._auto_log("user", user_msg, save_memory=True)
+            await self._auto_log("assistant", asst_msg, save_memory=True)
             memory_id = await self.manager.add_memory(
                 text=combined,
                 tags=["conversation", "session"],
