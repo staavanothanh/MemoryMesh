@@ -1,6 +1,8 @@
 import asyncio
+import os
 import signal
 import logging
+import time
 from contextlib import asynccontextmanager
 
 from mcp.server import Server
@@ -23,6 +25,40 @@ from .tools import TOOLS
 from .handlers import ToolHandlers
 
 logger = logging.getLogger(__name__)
+
+PID_FILE = "memorymesh.pid"
+
+
+def _ensure_single_instance(db_dir: str):
+    """Kill orphaned MCP server process and write PID file."""
+    pid_file = os.path.join(db_dir, PID_FILE)
+    if os.path.exists(pid_file):
+        try:
+            with open(pid_file) as f:
+                old_pid = int(f.read().strip())
+            try:
+                os.kill(old_pid, signal.SIGTERM)
+                for _ in range(50):
+                    try:
+                        os.kill(old_pid, 0)
+                        time.sleep(0.1)
+                    except (OSError, ProcessLookupError):
+                        break
+            except (OSError, ProcessLookupError):
+                pass
+        except (ValueError, OSError):
+            pass
+    with open(pid_file, "w") as f:
+        f.write(str(os.getpid()))
+
+
+def _remove_pid_file(db_dir: str):
+    pid_file = os.path.join(db_dir, PID_FILE)
+    try:
+        if os.path.exists(pid_file):
+            os.remove(pid_file)
+    except OSError:
+        pass
 
 
 class MemoryMeshServer:
@@ -174,5 +210,10 @@ def main():
     config = AppConfig.from_env()
     config.validate()
     setup_logging(config.log_level)
-    server = MemoryMeshServer(config)
-    server.run()
+    db_dir = os.path.dirname(config.session.db_path)
+    _ensure_single_instance(db_dir)
+    try:
+        server = MemoryMeshServer(config)
+        server.run()
+    finally:
+        _remove_pid_file(db_dir)
