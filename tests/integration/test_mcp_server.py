@@ -180,3 +180,27 @@ async def test_handle_save_workspace_context(handlers, session_store):
 
     snapshots = await session_store.get_workspace_snapshots(handlers._current_session_id)
     assert len(snapshots) >= 1
+
+
+@pytest.mark.asyncio
+async def test_handle_resume_session(handlers, session_store):
+    first = await handlers.handle_new_session({
+        "system_prompt": "Initial prompt",
+        "user_id": "test_user",
+    })
+    first_id = first["data"]["session_id"]
+
+    await session_store.log_context(first_id, "user", "Hello")
+    await session_store.log_context(first_id, "assistant", "Hi there")
+
+    second = await handlers.handle_new_session({"user_id": "test_user"})
+
+    result = await handlers.handle_resume_session({
+        "session_id": first_id,
+        "top_k": 5,
+        "user_id": "test_user",
+    })
+    assert result["status"] == "success"
+    assert result["data"]["session"]["session_id"] == first_id
+    assert len(result["data"]["context_log"]) >= 2
+    assert "message" in result["data"]

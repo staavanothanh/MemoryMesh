@@ -37,6 +37,9 @@ class SessionConfig:
     db_path: str = "./db/sessions.db"
     auto_create_session: bool = True
     auto_scan_codebase: bool = True
+    auto_recall_on_start: bool = True
+    auto_compact_on_end: bool = True
+    compact_threshold: int = 20
     max_context_log: int = 500
 
     def validate(self):
@@ -103,6 +106,9 @@ class AppConfig:
                 db_path=os.getenv("SESSION_DB_PATH", "./db/sessions.db"),
                 auto_create_session=os.getenv("SESSION_AUTO_CREATE", "true").lower() == "true",
                 auto_scan_codebase=os.getenv("SESSION_AUTO_SCAN_CODEBASE", "true").lower() == "true",
+                auto_recall_on_start=os.getenv("SESSION_AUTO_RECALL_ON_START", "true").lower() == "true",
+                auto_compact_on_end=os.getenv("SESSION_AUTO_COMPACT_ON_END", "true").lower() == "true",
+                compact_threshold=int(os.getenv("SESSION_COMPACT_THRESHOLD", "20")),
                 max_context_log=int(os.getenv("SESSION_MAX_CONTEXT_LOG", "500")),
             ),
             consolidation=ConsolidationConfig(

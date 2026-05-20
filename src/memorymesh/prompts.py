@@ -9,3 +9,10 @@ Memory content:
 {content}
 
 Output:"""
+
+SESSION_COMPACT_PROMPT = """You are a conversation summarizer. Below is a conversation session log (user and assistant messages). Summarize the key information, decisions, and context into a single concise paragraph (max 200 words). Focus on what was discussed, what was decided, and what the current state is.
+
+Conversation Log:
+{log}
+
+Summary:"""

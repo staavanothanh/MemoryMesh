@@ -1,11 +1,12 @@
 import json
 import logging
-from typing import Optional
+from typing import Optional, List
 from ..hooks import hooks as global_hooks
 from ..memory.manager import MemoryManager
 from ..memory.session_store import SessionStore
 from ..scanner import CodebaseScanner
 from ..errors import MemoryMeshError
+from ..prompts import SESSION_COMPACT_PROMPT
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +60,56 @@ class ToolHandlers:
             logger.info("Codebase auto-scanned: %d entries, memory=%s", len(snapshot.get("tree", [])), memory_id)
         except Exception as e:
             logger.warning("Codebase auto-scan failed: %s", e)
+
+    async def _auto_recall_context(self, user_id: str = ""):
+        if not self._current_session_id:
+            return
+        uid = user_id or self.manager.config.default_user_id
+        try:
+            results = await self.manager.search_memory(
+                query="session context project plan development",
+                top_k=10,
+                user_id=uid,
+                level_filter=["knowledge", "user"],
+            )
+            if results:
+                summary = "\n".join(f"- [{r['importance']}] {r['content'][:200]}" for r in results)
+                await self.session_store.log_context(
+                    self._current_session_id, "assistant",
+                    f"[Auto-Recalled Context]\n{summary}",
+                    "recall",
+                )
+                logger.info("Auto-recalled %d memories for session %s", len(results), self._current_session_id)
+        except Exception as e:
+            logger.warning("Auto-recall failed: %s", e)
+
+    async def _compact_session(self, session_id: str, user_id: str = ""):
+        uid = user_id or self.manager.config.default_user_id
+        try:
+            log = await self.session_store.get_context_log(session_id, limit=self.manager.config.session.compact_threshold)
+            if len(log) < 3:
+                return
+            log_text = "\n".join(f"{entry['role']}: {entry['content'][:300]}" for entry in log)
+            prompt = SESSION_COMPACT_PROMPT.format(log=log_text)
+            summary = ""
+            try:
+                response = await self.manager.router.call_llm(prompt)
+                summary = response.strip().strip('"').strip("'")
+            except Exception as e:
+                logger.warning("LLM compact failed, using fallback: %s", e)
+                summary = f"Session {session_id}: {len(log)} messages, ended."
+            if not summary:
+                summary = f"Session {session_id}: {len(log)} messages, ended."
+            memory_id = await self.manager.add_memory(
+                text=f"[Session Summary] {summary[:1000]}",
+                tags=["session_summary", "compacted"],
+                importance=4,
+                level="knowledge",
+                user_id=uid,
+            )
+            logger.info("Session compacted: %s -> memory=%s", session_id, memory_id)
+        except Exception as e:
+            logger.warning("Session compaction failed: %s", e)
 
     async def handle_remember(self, args: dict) -> dict:
         try:
@@ -197,6 +248,7 @@ class ToolHandlers:
             else:
                 memory_id = None
             await self._auto_scan_codebase(workspace_path, user_id)
+            await self._auto_recall_context(user_id)
             await self._auto_log("assistant", f"New session created: {session_id}", "new_session", str(args))
             return {
                 "status": "success",
@@ -213,8 +265,11 @@ class ToolHandlers:
     async def handle_end_session(self, args: dict) -> dict:
         try:
             session_id = args.get("session_id", self._current_session_id)
+            user_id = args.get("user_id", self.manager.config.default_user_id)
             if not session_id:
                 return {"status": "error", "error": "No active session to end"}
+            if self.manager.config.session.auto_compact_on_end:
+                await self._compact_session(session_id, user_id)
             await self.session_store.end_session(session_id)
             if session_id == self._current_session_id:
                 self._current_session_id = ""
@@ -281,4 +336,43 @@ class ToolHandlers:
             return {"status": "success", "data": {"memory_id": memory_id, "snapshot": snapshot}}
         except MemoryMeshError as e:
             logger.error("Save workspace context failed: %s", e)
+            return {"status": "error", "error": str(e)}
+
+    async def handle_resume_session(self, args: dict) -> dict:
+        try:
+            session_id = args["session_id"]
+            top_k = args.get("top_k", 10)
+            user_id = args.get("user_id", self.manager.config.default_user_id)
+
+            session = await self.session_store.get_session(session_id)
+            if not session:
+                return {"status": "error", "error": f"Session {session_id} not found"}
+
+            context = await self.session_store.get_context_log(session_id, limit=50)
+            snapshots = await self.session_store.get_workspace_snapshots(session_id)
+
+            recall_query = session.get("system_prompt", "") or f"session {session_id[:8]} context"
+            memories = await self.manager.search_memory(
+                query=recall_query,
+                top_k=top_k,
+                user_id=user_id,
+            )
+
+            await self._auto_log("assistant", f"Resumed session {session_id}: {len(context)} messages, {len(memories)} memories", "resume_session", str(args), save_memory=True)
+
+            return {
+                "status": "success",
+                "data": {
+                    "session": session,
+                    "context_log": context,
+                    "workspace_snapshots": snapshots,
+                    "recalled_memories": [
+                        {"id": m["id"], "content": m["content"][:300], "score": m["score"]}
+                        for m in memories
+                    ],
+                    "message": f"Đã khôi phục session {session_id[:8]}...",
+                },
+            }
+        except MemoryMeshError as e:
+            logger.error("Resume session failed: %s", e)
             return {"status": "error", "error": str(e)}

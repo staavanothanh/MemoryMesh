@@ -157,4 +157,17 @@ TOOLS = [
             },
         },
     ),
+    Tool(
+        name="resume_session",
+        description="Khôi phục context của một session cũ vào session hiện tại. Recall memories từ session cũ.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "session_id": {"type": "string", "description": "ID session cần khôi phục"},
+                "top_k": {"type": "integer", "minimum": 1, "maximum": 50, "description": "Số memory cần recall (mặc định 10)"},
+                "user_id": {"type": "string", "description": "ID người dùng"},
+            },
+            "required": ["session_id"],
+        },
+    ),
 ]

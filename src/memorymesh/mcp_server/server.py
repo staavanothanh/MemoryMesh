@@ -48,6 +48,7 @@ class MemoryMeshServer:
                 "new_session": self.handlers.handle_new_session,
                 "end_session": self.handlers.handle_end_session,
                 "save_workspace_context": self.handlers.handle_save_workspace_context,
+                "resume_session": self.handlers.handle_resume_session,
             }
             handler = handler_map.get(name)
             if not handler:
@@ -69,6 +70,8 @@ class MemoryMeshServer:
             await self.handlers.set_session(session_id)
             if self.config.session.auto_scan_codebase:
                 await self.handlers._auto_scan_codebase(user_id=self.config.default_user_id)
+            if self.config.session.auto_recall_on_start:
+                await self.handlers._auto_recall_context(user_id=self.config.default_user_id)
         async with stdio_server() as (read_stream, write_stream):
             await self.mcp_server.run(
                 read_stream,
