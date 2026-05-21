@@ -191,3 +191,11 @@ class SessionStore:
         )
         rows = await cursor.fetchall()
         return [dict(r) for r in rows]
+
+    async def get_context_log_count(self, session_id: str) -> int:
+        cursor = await self._db.execute(
+            "SELECT COUNT(*) as cnt FROM context_log WHERE session_id = ?",
+            (session_id,),
+        )
+        row = await cursor.fetchone()
+        return row["cnt"] if row else 0

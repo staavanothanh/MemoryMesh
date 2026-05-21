@@ -107,7 +107,19 @@ class MemoryMeshServer:
             handler = handler_map.get(name)
             if not handler:
                 raise ValueError(f"Unknown tool: {name}")
+
+            # Layer 2/3 tracking (must run before handler)
+            self.handlers._note_tool_call(name)
+
             result = await handler(arguments)
+
+            # LỚP 2: Auto-save mọi tool call (trừ read-only để tránh loop ghi đè)
+            read_only_tools = ("ping", "list_sessions", "list_memories", "get_session_context")
+            if name not in read_only_tools:
+                asyncio.create_task(
+                    self._safely_auto_save_tool(name, arguments, result)
+                )
+
             return [TextContent(type="text", text=json.dumps(result, ensure_ascii=False))]
 
     def _create_tracked_task(self, coro) -> asyncio.Task:
@@ -116,14 +128,20 @@ class MemoryMeshServer:
         task.add_done_callback(self._background_tasks.discard)
         return task
 
+    async def _safely_auto_save_tool(self, tool_name: str, args: dict, result: dict):
+        try:
+            await self.handlers.save_auto_tool_context(tool_name, args, result)
+        except Exception as e:
+            logger.warning("Layer 2 auto-save failed: %s", e)
+
     async def _initialize_fast(self):
         """Fast init: open DBs, warm embedder, and create a fresh session."""
         await self.backend.initialize()
         await self.session_store.initialize()
         if self.config.instinct.enabled:
             await self.manager.instinct_store.initialize()
-        # Pre-warm embedding model in background so first recall is fast
-        self._create_tracked_task(prewarm_embedder(self.config.embedding_model))
+        # Pre-warm embedding model synchronously so first recall is fast
+        await prewarm_embedder(self.config.embedding_model)
         if self.config.session.auto_create_session:
             session_id = await self.session_store.create_session(self.config.default_user_id)
             logger.info("Auto-created fresh session: %s", session_id)

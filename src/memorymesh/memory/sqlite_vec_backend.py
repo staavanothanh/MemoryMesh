@@ -419,6 +419,30 @@ class SqliteVecBackend:
     # List / enumerate
     # ------------------------------------------------------------------
 
+    async def delete_by_tag(self, tag: str) -> int:
+        cursor = await self._db.execute(
+            "SELECT id FROM memories WHERE metadata_json LIKE ? AND deleted = 0",
+            (f"%{tag}%",),
+        )
+        ids = [r[0] for r in await cursor.fetchall()]
+        if not ids:
+            return 0
+        placeholders = ",".join("?" for _ in ids)
+        now = datetime.now(timezone.utc).isoformat()
+        async with self._db.execute("BEGIN"):
+            await self._db.execute(
+                f"DELETE FROM memories WHERE id IN ({placeholders})", ids
+            )
+            await self._db.execute(
+                f"DELETE FROM vec_memories WHERE memory_id IN ({placeholders})", ids
+            )
+            await self._db.execute(
+                f"DELETE FROM memory_fts WHERE memory_id IN ({placeholders})", ids
+            )
+        await self._db.commit()
+        logger.info("Deleted %d memories by tag '%s'", len(ids), tag)
+        return len(ids)
+
     async def list_all(
         self, user_id: str, limit: int = 100, offset: int = 0
     ) -> List[Dict[str, Any]]:

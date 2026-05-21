@@ -1,4 +1,5 @@
 import pytest
+import time
 from pathlib import Path
 import tempfile
 import shutil
@@ -7,6 +8,18 @@ from memorymesh.config import AppConfig, RouterConfig, SqliteVecConfig, Consolid
 from memorymesh.router import RouterClient
 from memorymesh.memory.sqlite_vec_backend import SqliteVecBackend
 from memorymesh.memory.manager import MemoryManager
+
+
+def _force_unlink(path: Path, retries: int = 5, delay: float = 0.1):
+    for attempt in range(retries):
+        try:
+            path.unlink()
+            return
+        except PermissionError:
+            if attempt < retries - 1:
+                time.sleep(delay)
+        except FileNotFoundError:
+            return
 
 
 @pytest.fixture
@@ -24,16 +37,14 @@ def router_config():
 def sqlite_vec_config():
     tmp_file = Path(tempfile.mktemp(suffix="_vec_test.db"))
     yield SqliteVecConfig(db_path=str(tmp_file))
-    if tmp_file.exists():
-        tmp_file.unlink()
+    _force_unlink(tmp_file)
 
 
 @pytest.fixture
 def session_config():
     tmp_file = Path(tempfile.mktemp(suffix="_session_test.db"))
     yield SessionConfig(db_path=str(tmp_file), auto_create_session=False)
-    if tmp_file.exists():
-        tmp_file.unlink()
+    _force_unlink(tmp_file)
 
 
 @pytest.fixture

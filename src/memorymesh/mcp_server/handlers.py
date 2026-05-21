@@ -8,7 +8,7 @@ from ..memory.session_store import SessionStore
 from ..memory.fact_extractor import FactExtractor
 from ..scanner import CodebaseScanner
 from ..errors import MemoryMeshError
-from ..prompts import RECALL_INSTRUCTION, SESSION_COMPACT_PROMPT, BOOTSTRAP_SNAPSHOT_PROMPT
+from ..prompts import RECALL_INSTRUCTION, SAVE_CONTEXT_INSTRUCTION, SESSION_COMPACT_PROMPT, BOOTSTRAP_SNAPSHOT_PROMPT
 
 _MAGENTA = "\033[1;35m"
 _CYAN = "\033[1;36m"
@@ -30,10 +30,14 @@ class ToolHandlers:
         "cuối buổi trước chúng ta làm gì discussion topic",
     ]
 
+    _READ_ONLY_TOOLS = frozenset({"ping", "list_sessions", "list_memories", "get_session_context"})
+
     def __init__(self, manager: MemoryManager, session_store: SessionStore):
         self.manager = manager
         self.session_store = session_store
         self._current_session_id: str = ""
+        self._cached_workspace = None
+        self._exchange_unsaved: bool = False
         self._fact_extractor = FactExtractor(manager.config, manager.router)
         self._fact_batch_buffer: list[str] = []
         self._fact_batch_lock = asyncio.Lock()
@@ -47,8 +51,6 @@ class ToolHandlers:
         return self._current_session_id
 
     async def _get_workspace_path(self) -> str:
-        if not hasattr(self, '_cached_workspace'):
-            self._cached_workspace = None
         if self._cached_workspace is None and self._current_session_id:
             session = await self.session_store.get_session(self._current_session_id)
             if session:
@@ -64,11 +66,14 @@ class ToolHandlers:
             except Exception as e:
                 logger.warning("Context log failed: %s", e)
 
+    def _session_tag(self) -> str:
+        return f"session:{self._current_session_id[:8]}" if self._current_session_id else ""
+
     async def _save_context_memory(self, role: str, content: str, tool_name: str = ""):
         if not (self._current_session_id and role in ("user", "assistant") and content.strip()):
             return
         try:
-            tags = ["conversation", "session", role]
+            tags = ["conversation", "session", role, self._session_tag()]
             if tool_name:
                 tags.append(tool_name)
             await self.manager.add_memory(
@@ -81,6 +86,76 @@ class ToolHandlers:
             )
         except Exception as e:
             logger.warning("Context memory save failed: %s", e)
+
+    async def save_auto_tool_context(self, tool_name: str, args: dict, result: dict):
+        if not self._current_session_id:
+            return
+        try:
+            user_text = args.get("query") or args.get("content") or args.get("user_message") or ""
+            session_tag = self._session_tag()
+            if user_text:
+                combined = f"[{tool_name.upper()}] User: {user_text[:300]}"
+                tags = ["conversation", "session", "auto_save", tool_name, session_tag]
+            else:
+                combined = json.dumps({"tool": tool_name, "args": args}, ensure_ascii=False)[:300]
+                tags = ["conversation", "session", "auto_save", tool_name, session_tag]
+            await self.manager.add_memory(
+                text=combined,
+                tags=tags,
+                importance=4 if user_text else 3,
+                level="session",
+                user_id=args.get("user_id", self.manager.config.default_user_id),
+                workspace_path=await self._get_workspace_path(),
+            )
+            await self._log_context("assistant", combined, tool_name, str(args))
+        except Exception as e:
+            logger.warning("save_auto_tool_context failed: %s", e)
+
+    def _note_tool_call(self, tool_name: str):
+        if tool_name in self._READ_ONLY_TOOLS:
+            return
+        if tool_name == "save_context_pair":
+            self._exchange_unsaved = False
+            return
+        if tool_name not in ("recall", "end_session"):
+            self._exchange_unsaved = True
+
+        asyncio.create_task(self._layer3_depth_check())
+
+    async def _trigger_layer2(self):
+        if not self._current_session_id:
+            return
+        try:
+            recent = await self.session_store.get_context_log(self._current_session_id, limit=10)
+            summary_lines = []
+            for entry in recent[-5:]:
+                summary_lines.append(f"[{entry['role']}] {entry.get('content', '')[:200]}")
+            context_summary = "\n".join(summary_lines)
+            await self.manager.add_memory(
+                text=f"[AUTO_SAVE:LAYER2_MISSED_SAVE_CONTEXT_PAIR]\nUnsaved exchange detected. Recent context:\n{context_summary}",
+                tags=["conversation", "session", "auto_save", "layer2", self._session_tag()],
+                importance=4,
+                level="session",
+                user_id=self.manager.config.default_user_id,
+                workspace_path=await self._get_workspace_path(),
+            )
+            await self._log_context("assistant", "Layer 2 auto-save triggered (missed save_context_pair)", "auto_save_layer2")
+            logger.info("Layer 2 triggered for session %s", self._current_session_id[:8])
+        except Exception as e:
+            logger.warning("Layer 2 auto-save failed: %s", e)
+
+    async def _layer3_depth_check(self):
+        if not self._current_session_id:
+            return
+        try:
+            current_depth = await self.session_store.get_context_log_count(self._current_session_id)
+            threshold = self.manager.config.session.compact_threshold
+            if current_depth >= int(threshold * 0.8):
+                asyncio.create_task(self._compact_session(self._current_session_id, self.manager.config.default_user_id))
+                asyncio.create_task(self._create_bootstrap_snapshot(self._current_session_id, self.manager.config.default_user_id))
+                logger.info("Layer 3 depth check: %d entries >= 80%% of %d, compacting", current_depth, threshold)
+        except Exception as e:
+            logger.warning("Layer 3 depth check failed: %s", e)
 
     async def _auto_scan_codebase(self, workspace_path: str = "", user_id: str = ""):
         try:
@@ -262,6 +337,10 @@ class ToolHandlers:
             return {"status": "error", "error": str(e)}
 
     async def handle_recall(self, args: dict) -> dict:
+        if self._exchange_unsaved:
+            self._exchange_unsaved = False
+            asyncio.create_task(self._trigger_layer2())
+
         wp = args.get("workspace_path") or await self._get_workspace_path()
         uid = args.get("user_id", self.manager.config.default_user_id)
         try:
@@ -274,7 +353,8 @@ class ToolHandlers:
             )
             _log_bg("Recall", f"Tier={tier_used}, results={len(results)}, query='{args['query'][:80]}'", emoji="")
             await self._log_context("assistant", f"Recalled {len(results)} memories via {tier_used} for: {args['query'][:200]}", "recall", str(args))
-            await self._save_context_memory("assistant", f"Recalled {len(results)} memories via {tier_used} for: {args['query'][:200]}", "recall")
+            if results:
+                await self._save_context_memory("assistant", f"Recalled {len(results)} memories via {tier_used} for: {args['query'][:200]}", "recall")
 
             # Inject cached bootstrap context if recall was empty
             bootstrap_context = self._bootstrap_cache.pop(uid, None)
@@ -400,15 +480,19 @@ class ToolHandlers:
             # Narrative thread — preserves full exchange for chronological recall
             narrative_id = await self.manager.add_memory(
                 text=combined,
-                tags=["narrative_thread", "conversation", "session"],
+                tags=["narrative_thread", "conversation", "session", self._session_tag()],
                 importance=3,
                 level="session",
                 user_id=user_id,
                 workspace_path=await self._get_workspace_path(),
             )
 
+            # Layer 1: mark exchange as saved
+            self._exchange_unsaved = False
+
             # Extract atomic facts in background (non-blocking)
             asyncio.create_task(self._extract_and_save_facts(combined, user_id))
+
             return {"status": "success", "data": {"narrative_id": narrative_id, "session_id": self._current_session_id}}
         except MemoryMeshError as e:
             logger.error("Save context pair failed: %s", e)
@@ -432,6 +516,16 @@ class ToolHandlers:
             if not session:
                 return {"status": "error", "error": f"Session {session_id} not found"}
             context = await self.session_store.get_context_log(session_id, limit)
+
+            if len(context) < 3:
+                return {
+                    "status": "success",
+                    "data": {
+                        "session": session,
+                        "context_log": [],
+                        "formatted": f"### Session Context: {session_id[:8]}\n*Status: {session.get('status', 'unknown')}*\n*Empty session — no conversation history stored.*",
+                    },
+                }
 
             lines = [
                 f"### Session Context: {session_id[:8]}",
@@ -539,6 +633,7 @@ class ToolHandlers:
                 auto_close_stale=True,
             )
             self._current_session_id = session_id
+            self._exchange_unsaved = False
             if system_prompt:
                 memory_id = await self.manager.add_memory(
                     text=f"[System Prompt] {system_prompt}",
@@ -551,21 +646,65 @@ class ToolHandlers:
             else:
                 memory_id = None
 
-            # Return immediately, compute bootstrap in background
+            # Seed session start marker
+            await self.manager.add_memory(
+                text=f"[SESSION_START] Session {session_id[:8]} opened",
+                tags=["session_start", "bootstrap", "session", self._session_tag()],
+                importance=5,
+                level="session",
+                user_id=user_id,
+                workspace_path=workspace_path,
+            )
+
+            # Compute bootstrap synchronously (timeout 2s) so first recall has data
+            try:
+                scaffold = await asyncio.wait_for(
+                    self._get_bootstrap_scaffold(user_id, workspace_path), timeout=2.0
+                )
+                if scaffold:
+                    self._bootstrap_cache[user_id] = scaffold
+                    _log_bg("Bootstrap", f"Pre-computed and cached for {user_id}", emoji="")
+            except (asyncio.TimeoutError, Exception) as e:
+                _log_bg("Bootstrap", f"Background fallback: {e}", emoji="")
+                async def _cache_bootstrap():
+                    try:
+                        s = await self._get_bootstrap_scaffold(user_id, workspace_path)
+                        if s:
+                            self._bootstrap_cache[user_id] = s
+                    except Exception:
+                        pass
+                asyncio.create_task(_cache_bootstrap())
+
+            # Extract project context from git for immediate model awareness
+            project_context = ""
+            try:
+                import subprocess, os
+                wp = workspace_path or os.getcwd()
+                if os.path.isdir(os.path.join(wp, ".git")):
+                    log = subprocess.run(
+                        ["git", "log", "--oneline", "-5"],
+                        capture_output=True, text=True, timeout=5, cwd=wp,
+                    )
+                    if log.stdout:
+                        project_context = f"Recent commits:\n{log.stdout.strip()}"
+                    diff = subprocess.run(
+                        ["git", "diff", "--stat"],
+                        capture_output=True, text=True, timeout=5, cwd=wp,
+                    )
+                    if diff.stdout:
+                        project_context += f"\nUncommitted changes:\n{diff.stdout.strip()[:300]}"
+            except Exception:
+                pass
+
             data = {
                 "session_id": session_id,
                 "memory_id": memory_id,
                 "message": "Session mới đã được tạo",
+                "project_context": project_context or "MemoryMesh MCP server — memory mesh system",
                 "recall_instruction": RECALL_INSTRUCTION,
+                "save_instruction": SAVE_CONTEXT_INSTRUCTION,
             }
 
-            async def _compute_and_cache_bootstrap():
-                scaffold = await self._get_bootstrap_scaffold(user_id, workspace_path)
-                if scaffold:
-                    self._bootstrap_cache[user_id] = scaffold
-                    _log_bg("Bootstrap", f"Pre-computed and cached for {user_id}", emoji="")
-
-            asyncio.create_task(_compute_and_cache_bootstrap())
             asyncio.create_task(self._auto_scan_codebase(workspace_path, user_id))
             await self._log_context("assistant", f"New session created: {session_id}", "new_session", str(args))
 
@@ -575,6 +714,10 @@ class ToolHandlers:
             return {"status": "error", "error": str(e)}
 
     async def handle_end_session(self, args: dict) -> dict:
+        if self._exchange_unsaved:
+            self._exchange_unsaved = False
+            await self._trigger_layer2()
+
         try:
             session_id = args.get("session_id", self._current_session_id)
             user_id = args.get("user_id", self.manager.config.default_user_id)
@@ -584,6 +727,12 @@ class ToolHandlers:
                 await self._compact_session(session_id, user_id)
             await self._create_bootstrap_snapshot(session_id, user_id)
             await self._flush_fact_buffer()
+
+            # Cascade delete: xóa memories thuộc session này
+            deleted = await self.manager.delete_memories_by_session(session_id)
+            if deleted:
+                _log_bg("Cleanup", f"Deleted {deleted} memories for session {session_id[:8]}", emoji="🧹")
+
             await self.session_store.end_session(session_id)
             if session_id == self._current_session_id:
                 self._current_session_id = ""

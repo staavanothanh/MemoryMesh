@@ -500,6 +500,12 @@ class MemoryManager:
             logger.info("Memory soft-deleted: %s", memory_id)
         return success
 
+    async def delete_memories_by_session(self, session_id: str) -> int:
+        tag = f"session:{session_id[:8]}"
+        if hasattr(self.backend, "delete_by_tag"):
+            return await self.backend.delete_by_tag(tag)
+        return 0
+
     async def archive_memory(self, memory_id: str) -> bool:
         """Archive a memory (hide from recall, still in storage)."""
         async with self._write_lock:

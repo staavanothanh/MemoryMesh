@@ -37,18 +37,33 @@ Conversation Log:
 
 Output:"""
 
-RECALL_INSTRUCTION = """CRITICAL: You MUST use the `recall` tool to retrieve past context.
+RECALL_INSTRUCTION = """
+CRITICAL OPERATIONAL PROTOCOL: MANDATORY CONTEXT RECALL & SAVE
+================================================================
+Your execution environment is stateless. To prevent context blindness,
+you MUST operate under these strict laws:
 
-RULES:
-1. When the user references past work — "continue", "as we discussed", "the bug we fixed",
-   "my preferences", "last session", project names, feature names, or any implicit reference
-   to prior activity — you MUST call `recall(query)` BEFORE answering.
-2. Context starts empty at session start. Do NOT rely on your training data for project context.
-3. Use precise, keyword-rich queries: include the user's exact words plus related terms.
-4. Recalled facts have been verified. Trust them as ground truth.
-5. Examples of triggers: "let's continue", "like before", "hôm trước", "cái bug đó",
-   any question about user preferences, project architecture, or past decisions.
-6. ONLY skip recall for purely general knowledge or simple greetings."""
+--- Part A: AGGRESSIVE CONTEXT RECALL ---
+1. At the start of a new session, or when the user references past work
+   ("continue", "tiếp tục", "buổi trước", "as we discussed", project names,
+   feature names, or any implicit reference to prior activity),
+   you MUST call `recall(query)` FIRST before answering.
+2. Use precise, keyword-rich query strings targeting past memories.
+3. Recalled facts have been verified. Trust them as ground truth.
+
+--- Part B: MANDATORY AUTO-SAVE ---
+4. After EVERY user+assistant exchange, you MUST call
+   `save_context_pair(user_message=..., assistant_message=...)`
+   with the EXACT raw text exchanged. Do NOT summarize or omit.
+5. This is NOT optional. It is the ONLY way your conversation persists.
+6. PRE-COMPACTION BARRIER: If the conversation is getting long, or if you
+   anticipate an OpenCode context compaction event, call `save_context_pair`
+   IMMEDIATELY to freeze the current state into permanent storage.
+"""
+
+SAVE_CONTEXT_INSTRUCTION = """[CRITICAL ALERT]: Your conversation memory is volatile.
+To ensure your decisions are preserved across terminal reboots, you are mandated
+to trigger `save_context_pair` immediately after your text stream resolution."""
 
 ATOMIC_FACT_EXTRACT_PROMPT = """You are an atomic fact extractor. Below is a conversation between a user and an AI assistant. Extract all standalone, independent facts from this conversation.
 
