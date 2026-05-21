@@ -17,20 +17,19 @@ Conversation Log:
 
 Summary:"""
 
-BOOTSTRAP_SNAPSHOT_PROMPT = """You are a workspace state condenser. Below is a conversation session log from a software development session. 
+BOOTSTRAP_SNAPSHOT_PROMPT = """You are a high-level technical product manager and architect. Synthesize the current session chat logs.
 
-Extract a structured summary of ONLY what is explicitly discussed. Return a JSON object with these fields:
-- project_identity: what project/repo was being worked on (max 20 words)
-- discussion_topic: the main topic or narrative of this session (max 50 words)
-- architectural_decisions: key architecture/design decisions made (max 50 words)
-- last_milestone: what was accomplished this session (max 50 words)
-- open_impediments: unresolved issues or blockers mentioned (max 50 words)
-- next_steps: planned next actions or priorities (max 50 words)
+Return a strict JSON object with these fields (in this order):
+- narrative_summary: "A single dense paragraph summarizing what was discussed, why it was debated, and the current focus (max 100 words)"
+- discussion_topic: "The exact conceptual component or bug being addressed (max 40 words)"
+- architectural_decisions: "Core tech patterns implemented, files changed, or libraries swapped (max 50 words)"
+- last_milestone: "The very last functional state achieved before closing (max 40 words)"
+- next_steps: "Concrete itemized bullet points for the next incoming session (max 60 words)"
 
 Rules:
+- narrative_summary is MANDATORY — this is the primary recovery text for cold-start
 - Only include information EXPLICITLY present in the log
 - If a field has no information, set it to an empty string
-- Be concise: each field max 50 words
 - Return ONLY valid JSON, no extra text
 
 Conversation Log:
