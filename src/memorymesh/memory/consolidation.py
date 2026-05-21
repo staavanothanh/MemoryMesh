@@ -3,7 +3,7 @@
 import asyncio
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import List, Dict, Any, Optional
 
 from ..config import AppConfig
@@ -215,6 +215,33 @@ class ConsolidationEngine:
         if resolved_count:
             logger.info("Fact consolidation: resolved %d groups for user %s", resolved_count, user_id)
         return resolved_count
+
+    async def run_expiry(self, user_id: str) -> int:
+        """Mark session-level memories older than TTL as expired. Returns count expired."""
+        ttl_days = self.config.consolidation.session_memory_ttl_days
+        if ttl_days <= 0:
+            return 0
+        all_mems = await self.backend.get_with_embeddings(user_id, limit=self.batch_size)
+        cutoff = datetime.now(timezone.utc) - timedelta(days=ttl_days)
+        expired_count = 0
+        for m in all_mems:
+            meta = m.get("metadata", {})
+            if meta.get("expired") or meta.get("consolidated"):
+                continue
+            if meta.get("level") != "session":
+                continue
+            ts = meta.get("timestamp", "")
+            if ts:
+                try:
+                    created = datetime.fromisoformat(ts)
+                    if created < cutoff:
+                        await self.backend.update_metadata(m["id"], {"expired": True})
+                        expired_count += 1
+                except (ValueError, TypeError):
+                    continue
+        if expired_count:
+            logger.info("Expired %d old session memories for user %s", expired_count, user_id)
+        return expired_count
 
     async def run_for_user(self, user_id: str) -> int:
         """Run one consolidation pass. Returns number of merges performed."""

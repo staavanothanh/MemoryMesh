@@ -6,7 +6,7 @@ from typing import List, Optional, Dict, Any
 
 from ..config import AppConfig
 from ..router import RouterClient
-from ..prompts import ATOMIC_FACT_EXTRACT_PROMPT
+from ..prompts import ATOMIC_FACT_EXTRACT_PROMPT, ATOMIC_FACT_BATCH_PROMPT
 
 logger = logging.getLogger(__name__)
 
@@ -17,10 +17,7 @@ class FactExtractor:
         self.router = router
 
     async def extract_facts(self, conversation: str) -> List[Dict[str, Any]]:
-        """Extract atomic facts from a conversation via LLM.
-
-        Returns a list of fact dicts with keys: fact, confidence, tags.
-        """
+        """Extract atomic facts from a single conversation via LLM."""
         if not conversation.strip():
             return []
         prompt = ATOMIC_FACT_EXTRACT_PROMPT.format(conversation=conversation)
@@ -34,6 +31,25 @@ class FactExtractor:
             return self._deduplicate_and_validate(raw_facts)
         except Exception as e:
             logger.error("Fact extraction failed: %s", e)
+            return []
+
+    async def extract_facts_batch(self, conversations: List[str]) -> List[Dict[str, Any]]:
+        """Extract atomic facts from multiple conversations in a single LLM call."""
+        active = [c for c in conversations if c.strip()]
+        if not active:
+            return []
+        combined = "\n---\n".join(f"Conversation {i+1}:\n{c}" for i, c in enumerate(active))
+        prompt = ATOMIC_FACT_BATCH_PROMPT.format(conversations=combined)
+        try:
+            response = await self.router.call_llm(prompt)
+            data = json.loads(response)
+            raw_facts = data.get("facts", [])
+            if not isinstance(raw_facts, list):
+                logger.warning("FactExtractor batch: 'facts' is not a list: %s", type(raw_facts))
+                return []
+            return self._deduplicate_and_validate(raw_facts)
+        except Exception as e:
+            logger.error("Batch fact extraction failed: %s", e)
             return []
 
     def _deduplicate_and_validate(

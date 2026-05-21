@@ -27,7 +27,7 @@ async def handlers(memory_manager, session_store):
 async def test_handle_ping(handlers):
     result = await handlers.handle_ping({})
     assert result["status"] == "success"
-    assert result["data"] == "pong"
+    assert result["data"]["status"] == "ok"
 
 
 @pytest.mark.asyncio
@@ -86,7 +86,7 @@ async def test_handle_forget(handlers):
     memory_id = mem_result["data"]["id"]
     result = await handlers.handle_forget({"memory_id": memory_id})
     assert result["status"] == "success"
-    assert result["data"]["deleted"] is True
+    assert result["data"]["archived"] is True
 
 
 @pytest.mark.asyncio

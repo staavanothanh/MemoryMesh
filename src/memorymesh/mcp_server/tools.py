@@ -51,11 +51,33 @@ TOOLS = [
     ),
     Tool(
         name="forget",
-        description="Xóa một ký ức theo ID.",
+        description="Xóa (soft-delete) một ký ức theo ID. Ký ức sẽ không còn xuất hiện trong recall/list, nhưng có thể khôi phục bằng unarchive_memory.",
         inputSchema={
             "type": "object",
             "properties": {
                 "memory_id": {"type": "string", "description": "ID của ký ức cần xóa"},
+            },
+            "required": ["memory_id"],
+        },
+    ),
+    Tool(
+        name="archive_memory",
+        description="Chuyển một ký ức vào kho lưu trữ. Ký ức sẽ không xuất hiện trong recall/list cho đến khi được unarchive.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "memory_id": {"type": "string", "description": "ID của ký ức cần archive"},
+            },
+            "required": ["memory_id"],
+        },
+    ),
+    Tool(
+        name="unarchive_memory",
+        description="Khôi phục một ký ức đã archive. Ký ức sẽ xuất hiện trở lại trong recall/list.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "memory_id": {"type": "string", "description": "ID của ký ức cần unarchive"},
             },
             "required": ["memory_id"],
         },

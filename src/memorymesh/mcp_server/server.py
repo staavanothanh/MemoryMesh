@@ -90,6 +90,8 @@ class MemoryMeshServer:
                 "remember": self.handlers.handle_remember,
                 "recall": self.handlers.handle_recall,
                 "forget": self.handlers.handle_forget,
+                "archive_memory": self.handlers.handle_archive_memory,
+                "unarchive_memory": self.handlers.handle_unarchive_memory,
                 "list_memories": self.handlers.handle_list_memories,
                 "ping": self.handlers.handle_ping,
                 "save_system_prompt": self.handlers.handle_save_system_prompt,

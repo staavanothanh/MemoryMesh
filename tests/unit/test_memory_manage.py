@@ -108,9 +108,9 @@ async def test_forget_memory(memory_manager):
 
 @pytest.mark.asyncio
 async def test_forget_memory_nonexistent(memory_manager):
-    # ChromaDB silently ignores non-existent IDs
+    # Soft-delete on non-existent ID returns False
     success = await memory_manager.forget_memory("non-existent-id")
-    assert success is True
+    assert success is False
 
 
 @pytest.mark.asyncio

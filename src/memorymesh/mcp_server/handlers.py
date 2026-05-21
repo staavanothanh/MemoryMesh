@@ -13,11 +13,15 @@ from ..prompts import RECALL_INSTRUCTION, SESSION_COMPACT_PROMPT
 logger = logging.getLogger(__name__)
 
 class ToolHandlers:
+    _MAX_BATCH_SIZE = 3
+
     def __init__(self, manager: MemoryManager, session_store: SessionStore):
         self.manager = manager
         self.session_store = session_store
         self._current_session_id: str = ""
         self._fact_extractor = FactExtractor(manager.config, manager.router)
+        self._fact_batch_buffer: list[str] = []
+        self._fact_batch_lock = asyncio.Lock()
 
     async def set_session(self, session_id: str):
         self._current_session_id = session_id
@@ -136,11 +140,16 @@ class ToolHandlers:
         except Exception as e:
             logger.warning("Session compaction failed: %s", e)
 
-    async def _extract_and_save_facts(self, conversation: str, user_id: str = ""):
-        """Extract atomic facts from conversation and save them as memories (background)."""
-        uid = user_id or self.manager.config.default_user_id
+    async def _flush_fact_buffer(self):
+        """Flush buffered conversations to LLM in a single batched call."""
+        uid = self.manager.config.default_user_id
+        async with self._fact_batch_lock:
+            if not self._fact_batch_buffer:
+                return
+            batch = self._fact_batch_buffer[:]
+            self._fact_batch_buffer.clear()
         try:
-            facts = await self._fact_extractor.extract_facts(conversation)
+            facts = await self._fact_extractor.extract_facts_batch(batch)
             for item in facts:
                 fact_tags = item.get("tags", []) + ["atomic_fact", item.get("confidence", "medium")]
                 importance = self._fact_extractor._confidence_to_importance(item.get("confidence", "medium"))
@@ -153,9 +162,18 @@ class ToolHandlers:
                     workspace_path=await self._get_workspace_path(),
                 )
             if facts:
-                logger.info("Saved %d atomic facts from conversation", len(facts))
+                logger.info("Saved %d atomic facts from %d conversations (batched)", len(facts), len(batch))
         except Exception as e:
-            logger.warning("Atomic fact extraction background task failed: %s", e)
+            logger.warning("Batch fact extraction failed: %s", e)
+
+    async def _extract_and_save_facts(self, conversation: str, user_id: str = ""):
+        """Buffer conversation pair; flush to LLM in batch when threshold is reached."""
+        uid = user_id or self.manager.config.default_user_id
+        async with self._fact_batch_lock:
+            self._fact_batch_buffer.append(conversation)
+            if len(self._fact_batch_buffer) < self._MAX_BATCH_SIZE:
+                return
+        await self._flush_fact_buffer()
 
     async def handle_remember(self, args: dict) -> dict:
         wp = await self._get_workspace_path()
@@ -203,9 +221,25 @@ class ToolHandlers:
     async def handle_forget(self, args: dict) -> dict:
         try:
             success = await self.manager.forget_memory(args["memory_id"])
-            return {"status": "success", "data": {"id": args["memory_id"], "deleted": success}}
+            return {"status": "success", "data": {"id": args["memory_id"], "archived": success}}
         except MemoryMeshError as e:
             logger.error("Forget failed: %s", e)
+            return {"status": "error", "error": str(e)}
+
+    async def handle_archive_memory(self, args: dict) -> dict:
+        try:
+            success = await self.manager.archive_memory(args["memory_id"])
+            return {"status": "success", "data": {"id": args["memory_id"], "archived": success}}
+        except MemoryMeshError as e:
+            logger.error("Archive failed: %s", e)
+            return {"status": "error", "error": str(e)}
+
+    async def handle_unarchive_memory(self, args: dict) -> dict:
+        try:
+            success = await self.manager.unarchive_memory(args["memory_id"])
+            return {"status": "success", "data": {"id": args["memory_id"], "unarchived": success}}
+        except MemoryMeshError as e:
+            logger.error("Unarchive failed: %s", e)
             return {"status": "error", "error": str(e)}
 
     async def handle_list_memories(self, args: dict) -> dict:
@@ -221,7 +255,25 @@ class ToolHandlers:
             return {"status": "error", "error": str(e)}
 
     async def handle_ping(self, args: dict) -> dict:
-        return {"status": "success", "data": "pong"}
+        user_id = args.get("user_id", self.manager.config.default_user_id)
+        try:
+            memories = await self.manager.backend.list_all(user_id, limit=10000)
+            memory_count = len(memories)
+        except Exception:
+            memory_count = -1
+        try:
+            await self.manager.backend.fts.search("health", user_id, limit=1)
+            fts_ok = True
+        except Exception:
+            fts_ok = False
+        return {
+            "status": "success",
+            "data": {
+                "status": "ok",
+                "memory_count": memory_count,
+                "fts_connected": fts_ok,
+            },
+        }
 
     async def handle_save_system_prompt(self, args: dict) -> dict:
         try:
@@ -339,6 +391,7 @@ class ToolHandlers:
                 return {"status": "error", "error": "No active session to end"}
             if self.manager.config.session.auto_compact_on_end:
                 await self._compact_session(session_id, user_id)
+            await self._flush_fact_buffer()
             await self.session_store.end_session(session_id)
             if session_id == self._current_session_id:
                 self._current_session_id = ""

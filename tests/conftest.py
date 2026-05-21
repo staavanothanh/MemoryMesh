@@ -57,6 +57,7 @@ def app_config(router_config, chroma_config, fts_config, session_config):
             interval_seconds=3600,
             batch_size=50,
             enabled=False,
+            session_memory_ttl_days=7,
         ),
         embedding_model="paraphrase-multilingual-MiniLM-L12-v2",
         default_user_id="test_user",

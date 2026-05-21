@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import math
 import time
 from datetime import datetime, timezone
 from typing import List, Optional
@@ -39,6 +40,7 @@ class MemoryManager:
         self.instinct_engine = InstinctEngine(config, backend, self.instinct_store)
         self._last_consolidation: dict[str, float] = {}
         self._last_fact_resolution: dict[str, float] = {}
+        self._last_expiry: dict[str, float] = {}
         self._background_tasks: set[asyncio.Task] = set()
 
     def _create_tracked_task(self, coro) -> asyncio.Task:
@@ -160,6 +162,12 @@ class MemoryManager:
             self._last_fact_resolution[user_id] = now
             self._create_tracked_task(self._maybe_resolve_facts(user_id))
 
+        # 5. Session memory expiry: rate-limited (max once per 60s per user)
+        last_e = self._last_expiry.get(user_id, 0)
+        if now - last_e >= 60:
+            self._last_expiry[user_id] = now
+            self._create_tracked_task(self._maybe_expire_memories(user_id))
+
     async def _enrich_memory(self, memory_id: str, text: str, user_id: str):
         """Call LLM to get tags, importance, summary and update memory metadata."""
         try:
@@ -181,6 +189,15 @@ class MemoryManager:
                 logger.info("Enrichment produced no usable fields for %s: %s", memory_id, meta)
         except Exception as e:
             logger.error("Enrichment failed for %s: %s", memory_id, e)
+
+    async def _maybe_expire_memories(self, user_id: str):
+        """Expire old session memories, non-blocking."""
+        try:
+            expired = await self._consolidator.run_expiry(user_id)
+            if expired:
+                logger.info("Expired %d old session memories for user %s", expired, user_id)
+        except Exception as e:
+            logger.warning("Memory expiry failed for user %s: %s", user_id, e)
 
     async def _maybe_consolidate(self, user_id: str):
         """Run consolidation if enabled, non-blocking."""
@@ -209,13 +226,25 @@ class MemoryManager:
 
     @staticmethod
     def _recency_score(timestamp_str: str) -> float:
-        """Compute recency score (0-1) decaying over ~1 day."""
+        """Compute recency score (0-1) decaying over ~1 day (half-life ~16.6h)."""
         try:
             created = datetime.fromisoformat(timestamp_str)
             hours_ago = (datetime.now(timezone.utc) - created).total_seconds() / 3600
-            return __import__("math").exp(-abs(hours_ago) / 24)
+            return math.exp(-abs(hours_ago) / 24)
         except (ValueError, TypeError, OverflowError):
             return 0.0
+
+    @staticmethod
+    def _importance_decay(timestamp_str: str) -> float:
+        """Decay multiplier for importance (half-life ~7 days)."""
+        try:
+            created = datetime.fromisoformat(timestamp_str)
+            days_ago = (datetime.now(timezone.utc) - created).total_seconds() / 86400
+            if days_ago <= 0:
+                return 1.0
+            return math.exp(-days_ago / 7)
+        except (ValueError, TypeError, OverflowError):
+            return 1.0
 
     def _compute_final_score(self, mem: dict) -> float:
         w_s = self.config.truncation_weight_score
@@ -223,12 +252,13 @@ class MemoryManager:
         w_r = self.config.truncation_weight_recency
 
         fusion_score = mem.get("score", 0.0)
-        importance = mem.get("metadata", {}).get("importance", 3) / 5.0
+        raw_importance = mem.get("metadata", {}).get("importance", 3) / 5.0
+        decay = self._importance_decay(mem.get("metadata", {}).get("timestamp", ""))
+        importance = raw_importance * decay
         recency = self._recency_score(mem.get("metadata", {}).get("timestamp", ""))
 
         base_score = fusion_score * w_s + importance * w_i + recency * w_r
 
-        # Boost atomic facts: prefer concise, structured facts over raw conversation
         tags = mem.get("metadata", {}).get("tags", [])
         if isinstance(tags, list) and "atomic_fact" in tags:
             base_score *= 1.5
@@ -261,8 +291,13 @@ class MemoryManager:
                 )
             ]
 
-        # Filter out consolidated memories (already merged into another memory)
-        results = [m for m in results if not m.get("metadata", {}).get("consolidated")]
+        # Filter out consolidated, expired, and archived memories
+        results = [
+            m for m in results
+            if not m.get("metadata", {}).get("consolidated")
+            and not m.get("metadata", {}).get("expired")
+            and not m.get("metadata", {}).get("archived")
+        ]
 
         # Level-weighted scoring when no filter: boost session > user > knowledge
         if not level_filter:
@@ -310,17 +345,33 @@ class MemoryManager:
         ]
 
     async def forget_memory(self, memory_id: str) -> bool:
-        """Delete a memory."""
+        """Soft-delete a memory (mark as archived)."""
         async with self._write_lock:
-            success = await self.backend.delete(memory_id)
+            success = await self.backend.update_metadata(memory_id, {"archived": True})
         if success:
-            logger.info("Memory forgotten: %s", memory_id)
+            logger.info("Memory soft-deleted: %s", memory_id)
+        return success
+
+    async def archive_memory(self, memory_id: str) -> bool:
+        """Archive a memory (hide from recall, still in storage)."""
+        async with self._write_lock:
+            success = await self.backend.update_metadata(memory_id, {"archived": True})
+        if success:
+            logger.info("Memory archived: %s", memory_id)
+        return success
+
+    async def unarchive_memory(self, memory_id: str) -> bool:
+        """Restore an archived memory."""
+        async with self._write_lock:
+            success = await self.backend.update_metadata(memory_id, {"archived": False})
+        if success:
+            logger.info("Memory unarchived: %s", memory_id)
         return success
 
     async def list_memories(
         self, limit: int = 100, offset: int = 0, user_id: str = None
     ) -> List[MemoryRecord]:
-        """List memories for a user."""
+        """List memories for a user (excludes archived)."""
         user_id = user_id or self.config.default_user_id
         results = await self.backend.list_all(user_id, limit, offset)
         return [
@@ -333,4 +384,5 @@ class MemoryManager:
                 timestamp=m["metadata"].get("timestamp", ""),
             )
             for m in results
+            if not m.get("metadata", {}).get("archived")
         ]

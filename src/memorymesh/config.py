@@ -54,6 +54,7 @@ class ConsolidationConfig:
     interval_seconds: int = 3600
     batch_size: int = 50
     enabled: bool = True
+    session_memory_ttl_days: int = 7
 
     def validate(self):
         assert 0.0 < self.similarity_threshold <= 1.0, "similarity_threshold must be in (0, 1]"
@@ -134,6 +135,7 @@ class AppConfig:
                 interval_seconds=int(os.getenv("CONSOLIDATION_INTERVAL", "3600")),
                 batch_size=int(os.getenv("CONSOLIDATION_BATCH", "50")),
                 enabled=os.getenv("CONSOLIDATION_ENABLED", "true").lower() == "true",
+                session_memory_ttl_days=int(os.getenv("SESSION_MEMORY_TTL_DAYS", "7")),
             ),
             level_weight_session=float(os.getenv("LEVEL_WEIGHT_SESSION", "2.0")),
             level_weight_user=float(os.getenv("LEVEL_WEIGHT_USER", "1.5")),

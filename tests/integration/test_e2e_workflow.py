@@ -61,11 +61,13 @@ async def test_full_workflow(memory_manager, session_store):
     assert len(list_result["data"]) == 2
 
     ping_result = await handlers.handle_ping({})
-    assert ping_result == {"status": "success", "data": "pong"}
+    assert ping_result["status"] == "success"
+    assert ping_result["data"]["status"] == "ok"
+    assert isinstance(ping_result["data"]["memory_count"], int)
 
     forget_result = await handlers.handle_forget({"memory_id": memory_id_1})
     assert forget_result["status"] == "success"
-    assert forget_result["data"]["deleted"] is True
+    assert forget_result["data"]["archived"] is True
 
     list_after = await handlers.handle_list_memories({
         "limit": 10,
