@@ -22,6 +22,7 @@ from ..memory.manager import MemoryManager
 from ..memory.session_store import SessionStore
 from ..logging_ import setup_logging
 from ..prompts import RECALL_INSTRUCTION
+from ..embedder import prewarm_embedder
 from .tools import TOOLS
 from .handlers import ToolHandlers
 
@@ -116,11 +117,13 @@ class MemoryMeshServer:
         return task
 
     async def _initialize_fast(self):
-        """Fast init: open DBs and create a fresh session."""
+        """Fast init: open DBs, warm embedder, and create a fresh session."""
         await self.backend.initialize()
         await self.session_store.initialize()
         if self.config.instinct.enabled:
             await self.manager.instinct_store.initialize()
+        # Pre-warm embedding model in background so first recall is fast
+        self._create_tracked_task(prewarm_embedder(self.config.embedding_model))
         if self.config.session.auto_create_session:
             session_id = await self.session_store.create_session(self.config.default_user_id)
             logger.info("Auto-created fresh session: %s", session_id)

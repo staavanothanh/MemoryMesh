@@ -54,6 +54,9 @@ class SqliteVecBackend:
         )
         await self._db.execute("PRAGMA journal_mode=WAL")
         await self._db.execute("PRAGMA busy_timeout=5000")
+        await self._db.execute("PRAGMA cache_size = -20000")
+        await self._db.execute("PRAGMA mmap_size = 268435456")
+        await self._db.execute("PRAGMA temp_store = MEMORY")
         await self._create_schema()
         await self._db.commit()
         logger.info("SqliteVecBackend initialized at %s", self.db_path)
@@ -86,6 +89,9 @@ class SqliteVecBackend:
         )
         await self._db.execute(
             "CREATE INDEX IF NOT EXISTS idx_mem_time ON memories(created_at DESC)"
+        )
+        await self._db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_mem_deleted ON memories(deleted)"
         )
         # Table 2: vector ANN (sqlite-vec)
         await self._db.execute("""
@@ -296,7 +302,7 @@ class SqliteVecBackend:
         Step 2: filter by user_id / level / deleted in memories table
         """
         vec_bytes = np.array(embedding, dtype=np.float32).tobytes()
-        pool = max(top_k * 4, 20)
+        pool = max(top_k * 2, 10)
 
         cursor = await self._db.execute(
             "SELECT memory_id, distance FROM vec_memories WHERE embedding MATCH ? AND k = ?",

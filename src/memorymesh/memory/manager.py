@@ -285,7 +285,7 @@ class MemoryManager:
         user_id: str = None,
         workspace_path: Optional[str] = None,
         max_tokens: Optional[int] = None,
-        min_score_threshold: float = 0.35,
+        min_score_threshold: float = 0.25,
     ) -> tuple:
         """3-tier fallback retrieval. Returns (results, tier_name, metadata)."""
         uid = user_id or self.config.default_user_id

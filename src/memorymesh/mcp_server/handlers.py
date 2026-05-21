@@ -24,6 +24,11 @@ logger = logging.getLogger(__name__)
 
 class ToolHandlers:
     _MAX_BATCH_SIZE = 3
+    _BOOTSTRAP_QUERIES = [
+        "workspace state project bootstrap",
+        "session summary next steps last session",
+        "cuối buổi trước chúng ta làm gì discussion topic",
+    ]
 
     def __init__(self, manager: MemoryManager, session_store: SessionStore):
         self.manager = manager
@@ -32,6 +37,7 @@ class ToolHandlers:
         self._fact_extractor = FactExtractor(manager.config, manager.router)
         self._fact_batch_buffer: list[str] = []
         self._fact_batch_lock = asyncio.Lock()
+        self._bootstrap_cache: dict[str, str] = {}
 
     async def set_session(self, session_id: str):
         self._current_session_id = session_id
@@ -186,9 +192,10 @@ class ToolHandlers:
                 if val:
                     details.append(f"\n\u25a0 {key.replace('_', ' ').title()}: {val[:200]}")
             memory_text = f"[Bootstrap] {narrative[:300]}" + "".join(details)
+            searchable_prefix = "buoi truoc session ket thuc du an lam viec last "
 
             memory_id = await self.manager.add_memory(
-                text=memory_text[:1000],
+                text=searchable_prefix + memory_text[:970],
                 tags=["bootstrap", "workspace_state", "session_summary"],
                 importance=5,
                 level="knowledge",
@@ -256,17 +263,30 @@ class ToolHandlers:
 
     async def handle_recall(self, args: dict) -> dict:
         wp = args.get("workspace_path") or await self._get_workspace_path()
+        uid = args.get("user_id", self.manager.config.default_user_id)
         try:
             results, tier_used, _ = await self.manager.search_with_fallback(
                 query=args["query"],
                 top_k=args.get("top_k", 10),
-                user_id=args.get("user_id"),
+                user_id=uid,
                 workspace_path=wp,
                 max_tokens=args.get("max_tokens"),
             )
             _log_bg("Recall", f"Tier={tier_used}, results={len(results)}, query='{args['query'][:80]}'", emoji="")
             await self._log_context("assistant", f"Recalled {len(results)} memories via {tier_used} for: {args['query'][:200]}", "recall", str(args))
             await self._save_context_memory("assistant", f"Recalled {len(results)} memories via {tier_used} for: {args['query'][:200]}", "recall")
+
+            # Inject cached bootstrap context if recall was empty
+            bootstrap_context = self._bootstrap_cache.pop(uid, None)
+            if not results and bootstrap_context:
+                _log_bg("Bootstrap", f"Injected cached bootstrap context for {uid}", emoji="")
+                return {
+                    "status": "success",
+                    "data": [],
+                    "formatted": bootstrap_context,
+                    "meta": {"tier": "bootstrap_cache", "count": 0},
+                }
+
             formatted = []
             for r in results:
                 tags = r.get("tags", []) or []
@@ -412,38 +432,78 @@ class ToolHandlers:
             if not session:
                 return {"status": "error", "error": f"Session {session_id} not found"}
             context = await self.session_store.get_context_log(session_id, limit)
-            snapshots = await self.session_store.get_workspace_snapshots(session_id)
-            return {"status": "success", "data": {"session": session, "context_log": context, "workspace_snapshots": snapshots}}
+
+            lines = [
+                f"### Session Context: {session_id[:8]}",
+                f"*Status: {session.get('status', 'unknown')}*",
+                "",
+            ]
+            for msg in context[:limit]:
+                role = msg["role"]
+                content = msg["content"][:500]
+                lines.append(f"**{role}**: {content}")
+            markdown = "\n".join(lines)
+
+            return {
+                "status": "success",
+                "data": {
+                    "session": session,
+                    "context_log": context,
+                    "formatted": markdown,
+                },
+            }
         except Exception as e:
             logger.error("Get session context failed: %s", e)
             return {"status": "error", "error": str(e)}
 
     async def _get_bootstrap_scaffold(self, user_id: str, workspace_path: str) -> str | None:
-        """Recall L1 bootstrap or latest context via 3-tier fallback, format scaffold."""
+        """Recall L1 bootstrap via multi-query parallel search, format scaffold."""
         uid = user_id or self.manager.config.default_user_id
         try:
-            results, tier_used, _ = await self.manager.search_with_fallback(
-                query="workspace state project bootstrap",
-                top_k=3,
-                user_id=uid,
-                workspace_path=workspace_path or await self._get_workspace_path(),
-                max_tokens=800,
-                min_score_threshold=0.3,
-            )
-            if not results:
+            wp = workspace_path or await self._get_workspace_path()
+
+            tasks = [
+                self.manager.search_with_fallback(
+                    query=q,
+                    top_k=2,
+                    user_id=uid,
+                    workspace_path=wp,
+                    max_tokens=800,
+                    min_score_threshold=0.2,
+                )
+                for q in self._BOOTSTRAP_QUERIES
+            ]
+            all_results_raw = await asyncio.gather(*tasks, return_exceptions=True)
+
+            seen_ids = set()
+            merged = []
+            best_tier = "empty"
+            for result in all_results_raw:
+                if isinstance(result, Exception):
+                    continue
+                results, tier, _ = result
+                for r in results:
+                    rid = r.get("id")
+                    if rid not in seen_ids:
+                        seen_ids.add(rid)
+                        merged.append(r)
+                if results and tier != "empty":
+                    best_tier = tier
+
+            if not merged:
                 return None
 
             best = next(
-                (r for r in results if
+                (r for r in merged if
                  "bootstrap" in r.get("tags", []) or "session_summary" in r.get("tags", [])),
-                results[0],
+                merged[0],
             )
             source_label = {
                 "semantic": "previous session",
                 "fts_keyword": "keyword match",
                 "chronological": "most recent activity",
                 "empty": "none",
-            }.get(tier_used, "memory")
+            }.get(best_tier, "memory")
 
             return (
                 f"\n==============================================================================\n"
@@ -491,20 +551,24 @@ class ToolHandlers:
             else:
                 memory_id = None
 
-            # L1 Bootstrap — recall synchronously and return in response so model sees it
-            scaffold = await self._get_bootstrap_scaffold(user_id, workspace_path)
-            asyncio.create_task(self._auto_scan_codebase(workspace_path, user_id))
-            await self._log_context("assistant", f"New session created: {session_id}", "new_session", str(args))
-
+            # Return immediately, compute bootstrap in background
             data = {
                 "session_id": session_id,
                 "memory_id": memory_id,
                 "message": "Session mới đã được tạo",
                 "recall_instruction": RECALL_INSTRUCTION,
             }
-            if scaffold:
-                data["bootstrap_context"] = scaffold
-                _log_bg("Bootstrap", f"Injected into new_session response", emoji="")
+
+            async def _compute_and_cache_bootstrap():
+                scaffold = await self._get_bootstrap_scaffold(user_id, workspace_path)
+                if scaffold:
+                    self._bootstrap_cache[user_id] = scaffold
+                    _log_bg("Bootstrap", f"Pre-computed and cached for {user_id}", emoji="")
+
+            asyncio.create_task(_compute_and_cache_bootstrap())
+            asyncio.create_task(self._auto_scan_codebase(workspace_path, user_id))
+            await self._log_context("assistant", f"New session created: {session_id}", "new_session", str(args))
+
             return {"status": "success", "data": data}
         except MemoryMeshError as e:
             logger.error("New session failed: %s", e)
