@@ -60,10 +60,10 @@ class TestSearchWithFallback:
     async def test_tier2_fts_as_fallback_when_semantic_empty(self, memory_manager):
         with patch.object(memory_manager, "search_memory", new=AsyncMock(return_value=[])):
             with patch.object(memory_manager, "_extract_query_keywords", return_value="keyword"):
-                with patch.object(memory_manager.backend.fts, "search", new=AsyncMock(return_value=[
+                with patch.object(memory_manager.backend, "fts_search", new=AsyncMock(return_value=[
                     {"id": "m2", "content": "keyword match", "score": 1.0},
                 ])):
-                    with patch.object(memory_manager.backend.chroma, "get_with_embeddings_by_ids",
+                    with patch.object(memory_manager.backend, "get_with_embeddings_by_ids",
                                       new=AsyncMock(return_value=[
                                           {"id": "m2", "metadata": {"tags": [], "level": "session"}},
                                       ])):
@@ -78,11 +78,11 @@ class TestSearchWithFallback:
     async def test_tier3_chronological_when_all_above_empty(self, memory_manager):
         with patch.object(memory_manager, "search_memory", new=AsyncMock(return_value=[])):
             with patch.object(memory_manager, "_extract_query_keywords", return_value="xyz"):
-                with patch.object(memory_manager.backend.fts, "search", new=AsyncMock(return_value=[])):
-                    with patch.object(memory_manager.backend.fts, "list_recent", new=AsyncMock(return_value=[
+                with patch.object(memory_manager.backend, "fts_search", new=AsyncMock(return_value=[])):
+                    with patch.object(memory_manager.backend, "list_recent", new=AsyncMock(return_value=[
                         {"id": "m3", "content": "recent", "score": 1.0},
                     ])):
-                        with patch.object(memory_manager.backend.chroma, "get_with_embeddings_by_ids",
+                        with patch.object(memory_manager.backend, "get_with_embeddings_by_ids",
                                           new=AsyncMock(return_value=[
                                               {"id": "m3", "metadata": {"tags": [], "level": "session"}},
                                           ])):
@@ -96,9 +96,9 @@ class TestSearchWithFallback:
     async def test_all_tiers_empty_returns_empty(self, memory_manager):
         with patch.object(memory_manager, "search_memory", new=AsyncMock(return_value=[])):
             with patch.object(memory_manager, "_extract_query_keywords", return_value="xyz"):
-                with patch.object(memory_manager.backend.fts, "search", new=AsyncMock(return_value=[])):
-                    with patch.object(memory_manager.backend.fts, "list_recent", new=AsyncMock(return_value=[])):
-                        with patch.object(memory_manager.backend.chroma, "get_with_embeddings_by_ids",
+                with patch.object(memory_manager.backend, "fts_search", new=AsyncMock(return_value=[])):
+                    with patch.object(memory_manager.backend, "list_recent", new=AsyncMock(return_value=[])):
+                        with patch.object(memory_manager.backend, "get_with_embeddings_by_ids",
                                           new=AsyncMock(return_value=[])):
                             results, tier, meta = await memory_manager.search_with_fallback(
                                 query="nothing", top_k=5, user_id="test_user",
@@ -110,10 +110,10 @@ class TestSearchWithFallback:
     async def test_tier_fts_uses_extracted_keywords(self, memory_manager):
         with patch.object(memory_manager, "search_memory", new=AsyncMock(return_value=[])):
             fts_mock = AsyncMock(return_value=[])
-            with patch.object(memory_manager.backend.fts, "search", fts_mock):
+            with patch.object(memory_manager.backend, "fts_search", fts_mock):
                 with patch.object(memory_manager, "_extract_query_keywords", return_value="bug fix"):
-                    with patch.object(memory_manager.backend.fts, "list_recent", new=AsyncMock(return_value=[])):
-                        with patch.object(memory_manager.backend.chroma, "get_with_embeddings_by_ids",
+                    with patch.object(memory_manager.backend, "list_recent", new=AsyncMock(return_value=[])):
+                        with patch.object(memory_manager.backend, "get_with_embeddings_by_ids",
                                           new=AsyncMock(return_value=[])):
                             await memory_manager.search_with_fallback(
                                 query="what bug did we fix", top_k=5, user_id="test_user",
@@ -169,9 +169,9 @@ class TestSearchWithFallback:
             SearchResult(id="low", content="low score", score=0.2, tags=[], importance=3, timestamp=""),
         ])):
             with patch.object(memory_manager, "_extract_query_keywords", return_value="xyz"):
-                with patch.object(memory_manager.backend.fts, "search", new=AsyncMock(return_value=[])):
-                    with patch.object(memory_manager.backend.fts, "list_recent", new=AsyncMock(return_value=[])):
-                        with patch.object(memory_manager.backend.chroma, "get_with_embeddings_by_ids",
+                with patch.object(memory_manager.backend, "fts_search", new=AsyncMock(return_value=[])):
+                    with patch.object(memory_manager.backend, "list_recent", new=AsyncMock(return_value=[])):
+                        with patch.object(memory_manager.backend, "get_with_embeddings_by_ids",
                                           new=AsyncMock(return_value=[])):
                             results, tier, meta = await memory_manager.search_with_fallback(
                                 query="test", top_k=5, user_id="test_user", min_score_threshold=0.5,
@@ -182,7 +182,7 @@ class TestSearchWithFallback:
 class TestEnrichFtsResults:
     @pytest.mark.asyncio
     async def test_attaches_metadata(self, memory_manager):
-        with patch.object(memory_manager.backend.chroma, "get_with_embeddings_by_ids",
+        with patch.object(memory_manager.backend, "get_with_embeddings_by_ids",
                           new=AsyncMock(return_value=[
                               {"id": "m1", "metadata": {"tags": ["tag1"], "user_id": "test_user"}},
                           ])):
@@ -199,7 +199,7 @@ class TestEnrichFtsResults:
 
     @pytest.mark.asyncio
     async def test_handles_missing_chroma(self, memory_manager):
-        with patch.object(memory_manager.backend.chroma, "get_with_embeddings_by_ids",
+        with patch.object(memory_manager.backend, "get_with_embeddings_by_ids",
                           new=AsyncMock(return_value=[])):
             fts_results = [{"id": "nonexistent_id", "content": "test", "score": 1.0}]
             enriched = await memory_manager._enrich_fts_results(fts_results, "test_user")
@@ -208,7 +208,7 @@ class TestEnrichFtsResults:
 
     @pytest.mark.asyncio
     async def test_chroma_exception_graceful(self, memory_manager):
-        with patch.object(memory_manager.backend.chroma, "get_with_embeddings_by_ids",
+        with patch.object(memory_manager.backend, "get_with_embeddings_by_ids",
                           new=AsyncMock(side_effect=Exception("Chroma down"))):
             fts_results = [{"id": "m1", "content": "test", "score": 1.0}]
             enriched = await memory_manager._enrich_fts_results(fts_results, "test_user")

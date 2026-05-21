@@ -17,7 +17,7 @@ import uvicorn
 from ..config import AppConfig
 from ..router import RouterClient
 from ..hooks import hooks as global_hooks
-from ..memory.hybrid_backend import HybridBackend
+from ..memory.sqlite_vec_backend import SqliteVecBackend
 from ..memory.manager import MemoryManager
 from ..memory.session_store import SessionStore
 from ..logging_ import setup_logging
@@ -65,7 +65,7 @@ def _remove_pid_file(db_dir: str):
 class MemoryMeshServer:
     def __init__(self, config: AppConfig):
         self.config = config
-        self.backend = HybridBackend(config)
+        self.backend = SqliteVecBackend(config.sqlite_vec.db_path)
         self.router = RouterClient(config.router)
         self.manager = MemoryManager(config, self.backend, self.router, hooks=global_hooks)
         self.session_store = SessionStore(config.session.db_path)

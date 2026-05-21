@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Literal, Optional
 import os
 from dotenv import load_dotenv
 
@@ -17,11 +17,22 @@ class RouterConfig:
         assert all([result.scheme, result.netloc]), f"Invalid router URL: {self.url}"
 
 @dataclass
+class SqliteVecConfig:
+    db_path: str = "./db/memory.db"
+    auto_migrate: bool = False
+
+    def validate(self):
+        os.makedirs(os.path.dirname(self.db_path) or ".", exist_ok=True)
+
+
+# Deprecated — kept for migration script only
+@dataclass
 class ChromaConfig:
     db_path: str = "./db/chroma"
 
     def validate(self):
         os.makedirs(self.db_path, exist_ok=True)
+
 
 @dataclass
 class FTSConfig:
@@ -75,11 +86,13 @@ class InstinctConfig:
 @dataclass
 class AppConfig:
     router: RouterConfig
-    chroma: ChromaConfig
-    fts: FTSConfig
+    sqlite_vec: SqliteVecConfig
     session: SessionConfig
     consolidation: ConsolidationConfig
     instinct: InstinctConfig = field(default_factory=InstinctConfig)
+    # Deprecated — kept for migration script
+    chroma: ChromaConfig = field(default_factory=ChromaConfig)
+    fts: FTSConfig = field(default_factory=FTSConfig)
     level_weight_session: float = 2.0
     level_weight_user: float = 1.5
     level_weight_knowledge: float = 1.0
@@ -89,10 +102,6 @@ class AppConfig:
     mcp_port: int = 8090
     max_memory_length: int = 2000
     log_level: str = "INFO"
-    rrf_k: int = 60
-    rrf_weight_vec: float = 0.7
-    rrf_weight_fts: float = 0.3
-    rrf_pool_size: int = 20
     token_budget: int = 1000
     truncation_weight_score: float = 0.6
     truncation_weight_importance: float = 0.3
@@ -109,11 +118,9 @@ class AppConfig:
                 timeout_s=int(os.getenv("ROUTER_TIMEOUT", "30")),
                 max_retries=int(os.getenv("ROUTER_RETRIES", "3")),
             ),
-            chroma=ChromaConfig(
-                db_path=os.getenv("CHROMA_DB_PATH", "./db/chroma"),
-            ),
-            fts=FTSConfig(
-                db_path=os.getenv("FTS_DB_PATH", "./db/memory_fts.db"),
+            sqlite_vec=SqliteVecConfig(
+                db_path=os.getenv("VEC_DB_PATH", "./db/memory.db"),
+                auto_migrate=os.getenv("VEC_AUTO_MIGRATE", "false").lower() == "true",
             ),
             session=SessionConfig(
                 db_path=os.getenv("SESSION_DB_PATH", "./db/sessions.db"),
@@ -137,6 +144,12 @@ class AppConfig:
                 enabled=os.getenv("CONSOLIDATION_ENABLED", "true").lower() == "true",
                 session_memory_ttl_days=int(os.getenv("SESSION_MEMORY_TTL_DAYS", "7")),
             ),
+            chroma=ChromaConfig(
+                db_path=os.getenv("CHROMA_DB_PATH", "./db/chroma"),
+            ),
+            fts=FTSConfig(
+                db_path=os.getenv("FTS_DB_PATH", "./db/memory_fts.db"),
+            ),
             level_weight_session=float(os.getenv("LEVEL_WEIGHT_SESSION", "2.0")),
             level_weight_user=float(os.getenv("LEVEL_WEIGHT_USER", "1.5")),
             level_weight_knowledge=float(os.getenv("LEVEL_WEIGHT_KNOWLEDGE", "1.0")),
@@ -145,10 +158,6 @@ class AppConfig:
             mcp_transport=os.getenv("MCP_TRANSPORT", "stdio"),
             mcp_port=int(os.getenv("MCP_PORT", "8090")),
             log_level=os.getenv("LOG_LEVEL", "INFO"),
-            rrf_k=int(os.getenv("RRF_K", "60")),
-            rrf_weight_vec=float(os.getenv("RRF_WEIGHT_VEC", "0.7")),
-            rrf_weight_fts=float(os.getenv("RRF_WEIGHT_FTS", "0.3")),
-            rrf_pool_size=int(os.getenv("RRF_POOL_SIZE", "20")),
             token_budget=int(os.getenv("TOKEN_BUDGET", "1000")),
             truncation_weight_score=float(os.getenv("TRUNCATION_WEIGHT_SCORE", "0.6")),
             truncation_weight_importance=float(os.getenv("TRUNCATION_WEIGHT_IMPORTANCE", "0.3")),
@@ -157,8 +166,7 @@ class AppConfig:
 
     def validate(self):
         self.router.validate()
-        self.chroma.validate()
-        self.fts.validate()
+        self.sqlite_vec.validate()
         self.session.validate()
         self.consolidation.validate()
         self.instinct.validate()

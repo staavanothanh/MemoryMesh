@@ -3,10 +3,9 @@ from pathlib import Path
 import tempfile
 import shutil
 
-from memorymesh.config import AppConfig, RouterConfig, ChromaConfig, FTSConfig, ConsolidationConfig, SessionConfig
+from memorymesh.config import AppConfig, RouterConfig, SqliteVecConfig, ConsolidationConfig, SessionConfig
 from memorymesh.router import RouterClient
-from memorymesh.memory.chroma_impl import ChromaMemoryBackend
-from memorymesh.memory.hybrid_backend import HybridBackend
+from memorymesh.memory.sqlite_vec_backend import SqliteVecBackend
 from memorymesh.memory.manager import MemoryManager
 
 
@@ -22,16 +21,9 @@ def router_config():
 
 
 @pytest.fixture
-def chroma_config():
-    tmp_dir = Path(tempfile.mkdtemp(suffix="_chroma_test"))
-    yield ChromaConfig(db_path=str(tmp_dir))
-    shutil.rmtree(tmp_dir, ignore_errors=True)
-
-
-@pytest.fixture
-def fts_config():
-    tmp_file = Path(tempfile.mktemp(suffix="_fts_test.db"))
-    yield FTSConfig(db_path=str(tmp_file))
+def sqlite_vec_config():
+    tmp_file = Path(tempfile.mktemp(suffix="_vec_test.db"))
+    yield SqliteVecConfig(db_path=str(tmp_file))
     if tmp_file.exists():
         tmp_file.unlink()
 
@@ -45,11 +37,10 @@ def session_config():
 
 
 @pytest.fixture
-def app_config(router_config, chroma_config, fts_config, session_config):
+def app_config(router_config, sqlite_vec_config, session_config):
     return AppConfig(
         router=router_config,
-        chroma=chroma_config,
-        fts=fts_config,
+        sqlite_vec=sqlite_vec_config,
         session=session_config,
         consolidation=ConsolidationConfig(
             similarity_threshold=0.85,
@@ -66,25 +57,20 @@ def app_config(router_config, chroma_config, fts_config, session_config):
 
 
 @pytest.fixture
-def chroma_backend(chroma_config):
-    return ChromaMemoryBackend(chroma_config.db_path)
-
-
-@pytest.fixture
 def router_client(router_config):
     return RouterClient(router_config)
 
 
 @pytest.fixture
-async def hybrid_backend(app_config):
-    backend = HybridBackend(app_config)
-    await backend.initialize()
-    yield backend
-    await backend.close()
+async def backend(sqlite_vec_config):
+    b = SqliteVecBackend(sqlite_vec_config.db_path)
+    await b.initialize()
+    yield b
+    await b.close()
 
 
 @pytest.fixture
-async def memory_manager(app_config, hybrid_backend, router_client):
-    mgr = MemoryManager(app_config, hybrid_backend, router_client)
+async def memory_manager(app_config, backend, router_client):
+    mgr = MemoryManager(app_config, backend, router_client)
     yield mgr
     await mgr.shutdown()

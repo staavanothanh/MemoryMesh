@@ -335,7 +335,7 @@ class ToolHandlers:
         except Exception:
             memory_count = -1
         try:
-            await self.manager.backend.fts.search("health", user_id, limit=1)
+            await self.manager.backend.fts_search("health", user_id, limit=1)
             fts_ok = True
         except Exception:
             fts_ok = False

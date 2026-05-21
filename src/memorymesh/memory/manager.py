@@ -51,7 +51,6 @@ class MemoryManager:
         self._last_consolidation: dict[str, float] = {}
         self._last_fact_resolution: dict[str, float] = {}
         self._last_expiry: dict[str, float] = {}
-        self._last_fts_reconciliation: float = 0.0
         self._background_tasks: set[asyncio.Task] = set()
 
     def _create_tracked_task(self, coro) -> asyncio.Task:
@@ -179,8 +178,7 @@ class MemoryManager:
             self._last_expiry[user_id] = now
             self._create_tracked_task(self._maybe_expire_memories(user_id))
 
-        # 6. FTS reconciliation: rate-limited (max once per 300s regardless of user)
-        self._create_tracked_task(self._maybe_reconcile_fts())
+        # FTS reconciliation no longer needed — vector + FTS in single ACID transaction
 
     async def _enrich_memory(self, memory_id: str, text: str, user_id: str):
         """Call LLM to get tags, importance, summary and update memory metadata."""
@@ -238,60 +236,6 @@ class MemoryManager:
         except Exception as e:
             logger.warning("Instinct learning failed for user %s: %s", user_id, e)
 
-    async def _maybe_reconcile_fts(self):
-        """Reconcile FTS index with ChromaDB — re-index orphans, clean stale entries."""
-        now = time.monotonic()
-        if now - self._last_fts_reconciliation < 300:
-            return
-        self._last_fts_reconciliation = now
-
-        try:
-            fts_ids = set(await self.backend.fts.get_all_ids())
-            chroma_ids = set()
-            chroma_entries = {}
-            offset = 0
-            while True:
-                batch = await self.backend.chroma.get_with_embeddings(
-                    user_id="", limit=500, offset=offset
-                )
-                if not batch:
-                    break
-                for entry in batch:
-                    eid = entry["id"]
-                    chroma_ids.add(eid)
-                    chroma_entries[eid] = entry
-                offset += len(batch)
-                if len(batch) < 500:
-                    break
-
-            orphaned_in_fts = fts_ids - chroma_ids
-            for oid in orphaned_in_fts:
-                try:
-                    await self.backend.fts.delete(oid)
-                    logger.info("FTS reconciliation: removed stale entry %s", oid)
-                except Exception as e:
-                    logger.warning("FTS reconciliation: failed to remove stale %s: %s", oid, e)
-
-            missing_from_fts = chroma_ids - fts_ids
-            for mid in missing_from_fts:
-                entry = chroma_entries[mid]
-                meta = entry.get("metadata") or {}
-                content = entry.get("content", "")
-                user_id = meta.get("user_id", "")
-                level = meta.get("level", "user")
-                if not content or not user_id:
-                    continue
-                try:
-                    await self.backend.fts.reindex(mid, content, user_id, level)
-                    logger.info("FTS reconciliation: re-indexed %s", mid)
-                except Exception as e:
-                    logger.warning("FTS reconciliation: failed to re-index %s: %s", mid, e)
-
-            if orphaned_in_fts or missing_from_fts:
-                _log_bg("FTS Reconcile", f"{len(orphaned_in_fts)} stale removed, {len(missing_from_fts)} re-indexed", emoji="")
-        except Exception as e:
-            logger.warning("FTS reconciliation failed: %s", e)
-
     @staticmethod
     def _extract_query_keywords(query: str) -> str:
         """Extract content words from query for FTS, drop question words."""
@@ -314,12 +258,12 @@ class MemoryManager:
         fts_results: List[Dict],
         user_id: str,
     ) -> List[Dict]:
-        """Attach ChromaDB metadata to FTS results for scoring and filtering."""
+        """Attach metadata from backend to FTS results for scoring and filtering."""
         if not fts_results:
             return []
         ids = [r["id"] for r in fts_results]
         try:
-            chroma_data = await self.backend.chroma.get_with_embeddings_by_ids(ids)
+            chroma_data = await self.backend.get_with_embeddings_by_ids(ids)
             chroma_map = {d["id"]: d for d in chroma_data}
             enriched = []
             for r in fts_results:
@@ -359,7 +303,7 @@ class MemoryManager:
         keywords = self._extract_query_keywords(query)
         if keywords:
             try:
-                tier2_raw = await self.backend.fts.search(
+                tier2_raw = await self.backend.fts_search(
                     keywords, uid, limit=top_k * 2,
                 )
                 tier2_enriched = await self._enrich_fts_results(tier2_raw, uid)
@@ -387,7 +331,7 @@ class MemoryManager:
 
         # Tier 3: Chronological scan — always has results
         try:
-            tier3_raw = await self.backend.fts.list_recent(uid, limit=top_k)
+            tier3_raw = await self.backend.list_recent(uid, limit=top_k)
             tier3_enriched = await self._enrich_fts_results(tier3_raw, uid)
             # Apply filters
             tier3_filtered = [
