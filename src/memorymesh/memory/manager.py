@@ -3,7 +3,7 @@ import logging
 import math
 import time
 from datetime import datetime, timezone
-from typing import List, Optional
+from typing import List, Dict, Tuple, Optional
 
 import tiktoken
 
@@ -291,6 +291,139 @@ class MemoryManager:
                 _log_bg("FTS Reconcile", f"{len(orphaned_in_fts)} stale removed, {len(missing_from_fts)} re-indexed", emoji="")
         except Exception as e:
             logger.warning("FTS reconciliation failed: %s", e)
+
+    @staticmethod
+    def _extract_query_keywords(query: str) -> str:
+        """Extract content words from query for FTS, drop question words."""
+        QUESTION_WORDS = {
+            "cuoi", "buoi", "thao", "luan", "gi", "la", "co", "the",
+            "nao", "nhu", "khi", "sau", "truoc", "ban", "ve",
+            "what", "when", "how", "did", "was", "were", "the",
+            "last", "latest", "recent", "discuss", "discussed",
+            "nao", "nhe", "nhe", "ak", "ah", "a", "o", "di", "nhe",
+            "guong", "ma", "roi", "thu", "nha", "khong",
+            "continue", "continues", "continued",
+        }
+        import re
+        words = re.findall(r"[a-zA-ZÀ-ỹ]+", query.lower())
+        meaningful = [w for w in words if w not in QUESTION_WORDS and len(w) >= 3]
+        return " ".join(meaningful[:5])
+
+    async def _enrich_fts_results(
+        self,
+        fts_results: List[Dict],
+        user_id: str,
+    ) -> List[Dict]:
+        """Attach ChromaDB metadata to FTS results for scoring and filtering."""
+        if not fts_results:
+            return []
+        ids = [r["id"] for r in fts_results]
+        try:
+            chroma_data = await self.backend.chroma.get_with_embeddings_by_ids(ids)
+            chroma_map = {d["id"]: d for d in chroma_data}
+            enriched = []
+            for r in fts_results:
+                chroma = chroma_map.get(r["id"], {})
+                meta = chroma.get("metadata", {}) or {}
+                enriched.append({
+                    **r,
+                    "metadata": meta,
+                    "score": r.get("score", 0.0),
+                })
+            return enriched
+        except Exception:
+            return [{**r, "metadata": {}} for r in fts_results]
+
+    async def search_with_fallback(
+        self,
+        query: str,
+        top_k: int = 5,
+        user_id: str = None,
+        workspace_path: Optional[str] = None,
+        max_tokens: Optional[int] = None,
+        min_score_threshold: float = 0.35,
+    ) -> tuple:
+        """3-tier fallback retrieval. Returns (results, tier_name, metadata)."""
+        uid = user_id or self.config.default_user_id
+
+        # Tier 1: Semantic search via search_memory (with existing filters, budget)
+        tier1 = await self.search_memory(
+            query=query, top_k=top_k, user_id=uid,
+            workspace_path=workspace_path, max_tokens=max_tokens,
+        )
+        tier1_filtered = [r for r in tier1 if r.get("score", 0) >= min_score_threshold]
+        if tier1_filtered:
+            return tier1_filtered[:top_k], "semantic", {}
+
+        # Tier 2: FTS keyword search
+        keywords = self._extract_query_keywords(query)
+        if keywords:
+            try:
+                tier2_raw = await self.backend.fts.search(
+                    keywords, uid, limit=top_k * 2,
+                )
+                tier2_enriched = await self._enrich_fts_results(tier2_raw, uid)
+                # Filter out archived/consolidated/expired
+                tier2_filtered = [
+                    r for r in tier2_enriched
+                    if not r.get("metadata", {}).get("archived")
+                    and not r.get("metadata", {}).get("consolidated")
+                    and not r.get("metadata", {}).get("expired")
+                ]
+                # Apply workspace filter
+                if workspace_path:
+                    tier2_filtered = [
+                        r for r in tier2_filtered
+                        if self._is_workspace_visible(
+                            r.get("metadata", {}).get("workspace_path"), workspace_path
+                        )
+                    ]
+                if tier2_filtered:
+                    # Convert enriched dict to SearchResult
+                    results = self._dicts_to_search_results(tier2_filtered[:top_k])
+                    return results, "fts_keyword", {}
+            except Exception as e:
+                logger.warning("Tier 2 FTS failed: %s", e)
+
+        # Tier 3: Chronological scan — always has results
+        try:
+            tier3_raw = await self.backend.fts.list_recent(uid, limit=top_k)
+            tier3_enriched = await self._enrich_fts_results(tier3_raw, uid)
+            # Apply filters
+            tier3_filtered = [
+                r for r in tier3_enriched
+                if not r.get("metadata", {}).get("archived")
+                and not r.get("metadata", {}).get("consolidated")
+                and not r.get("metadata", {}).get("expired")
+            ]
+            if workspace_path:
+                tier3_filtered = [
+                    r for r in tier3_filtered
+                    if self._is_workspace_visible(
+                        r.get("metadata", {}).get("workspace_path"), workspace_path
+                    )
+                ]
+            if tier3_filtered:
+                results = self._dicts_to_search_results(tier3_filtered[:top_k])
+                return results, "chronological", {}
+        except Exception as e:
+            logger.warning("Tier 3 chronological fallback failed: %s", e)
+
+        return [], "empty", {}
+
+    def _dicts_to_search_results(self, dicts: List[Dict]) -> List[SearchResult]:
+        """Convert internal dict results to SearchResult objects."""
+        return [
+            SearchResult(
+                id=d.get("id", ""),
+                content=d.get("content", ""),
+                score=d.get("score", 0.0),
+                tags=d.get("metadata", {}).get("tags", []),
+                importance=d.get("metadata", {}).get("importance", 3),
+                timestamp=d.get("metadata", {}).get("timestamp", ""),
+            )
+            for d in dicts
+        ]
 
     @staticmethod
     def _recency_score(timestamp_str: str) -> float:

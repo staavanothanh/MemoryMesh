@@ -170,18 +170,20 @@ class ToolHandlers:
                 logger.warning("LLM bootstrap snapshot failed, using fallback: %s", e)
                 data = {
                     "project_identity": "",
+                    "discussion_topic": "",
                     "architectural_decisions": "",
                     "last_milestone": f"Session {session_id[:8]} ended",
                     "open_impediments": "",
+                    "next_steps": "",
                 }
 
-            data.setdefault("project_identity", "")
-            data.setdefault("architectural_decisions", "")
-            data.setdefault("last_milestone", f"Session {session_id[:8]} ended")
-            data.setdefault("open_impediments", "")
+            fields = ("project_identity", "discussion_topic", "architectural_decisions",
+                      "last_milestone", "open_impediments", "next_steps")
+            for key in fields:
+                data.setdefault(key, "")
 
             summary_parts = []
-            for key in ("project_identity", "architectural_decisions", "last_milestone", "open_impediments"):
+            for key in fields:
                 val = data.get(key, "")
                 if val:
                     label = key.replace("_", " ").title()
@@ -258,25 +260,35 @@ class ToolHandlers:
     async def handle_recall(self, args: dict) -> dict:
         wp = args.get("workspace_path") or await self._get_workspace_path()
         try:
-            results = await self.manager.search_memory(
+            results, tier_used, _ = await self.manager.search_with_fallback(
                 query=args["query"],
                 top_k=args.get("top_k", 10),
                 user_id=args.get("user_id"),
                 workspace_path=wp,
                 max_tokens=args.get("max_tokens"),
             )
-            await self._log_context("assistant", f"Recalled {len(results)} memories for: {args['query'][:200]}", "recall", str(args))
-            await self._save_context_memory("assistant", f"Recalled {len(results)} memories for: {args['query'][:200]}", "recall")
-            # Format as atomic fact bullets for clarity
+            _log_bg("Recall", f"Tier={tier_used}, results={len(results)}, query='{args['query'][:80]}'", emoji="")
+            await self._log_context("assistant", f"Recalled {len(results)} memories via {tier_used} for: {args['query'][:200]}", "recall", str(args))
+            await self._save_context_memory("assistant", f"Recalled {len(results)} memories via {tier_used} for: {args['query'][:200]}", "recall")
             formatted = []
             for r in results:
                 tags = r.get("tags", []) or []
-                prefix = "📌" if "atomic_fact" in tags else "•"
-                formatted.append(f"{prefix} {r['content']} (relevance: {r['score']:.2f})")
+                if "atomic_fact" in tags:
+                    prefix = "FACT"
+                elif "narrative_thread" in tags:
+                    prefix = "NARRATIVE"
+                elif "bootstrap" in tags or "workspace_state" in tags:
+                    prefix = "BOOTSTRAP"
+                elif "session_summary" in tags:
+                    prefix = "SUMMARY"
+                else:
+                    prefix = "MEM"
+                formatted.append(f"[{prefix}] {r.get('content', '')} (score: {r.get('score', 0.0):.2f})")
             return {
                 "status": "success",
                 "data": results,
                 "formatted": "\n".join(formatted) if formatted else "No relevant memories found.",
+                "meta": {"tier": tier_used, "count": len(results)},
             }
         except MemoryMeshError as e:
             logger.error("Recall failed: %s", e)
@@ -354,7 +366,7 @@ class ToolHandlers:
                 user_id=user_id,
                 workspace_path=await self._get_workspace_path(),
             )
-            return {"status": "success", "data": {"session_id": self._current_session_id, "memory_id": memory_id}}
+            return {"status": "success", "data": {"session_id": self._current_session_id, "memory_id": memory_id, "recall_instruction": RECALL_INSTRUCTION}}
         except MemoryMeshError as e:
             logger.error("Save system prompt failed: %s", e)
             return {"status": "error", "error": str(e)}
@@ -366,20 +378,21 @@ class ToolHandlers:
             asst_msg = args["assistant_message"]
             combined = f"User: {user_msg}\nAssistant: {asst_msg}"
             await self._log_context("user", user_msg)
-            await self._save_context_memory("user", user_msg)
             await self._log_context("assistant", asst_msg)
-            await self._save_context_memory("assistant", asst_msg)
-            memory_id = await self.manager.add_memory(
+
+            # Narrative thread — preserves full exchange for chronological recall
+            narrative_id = await self.manager.add_memory(
                 text=combined,
-                tags=["conversation", "session"],
+                tags=["narrative_thread", "conversation", "session"],
                 importance=3,
                 level="session",
                 user_id=user_id,
                 workspace_path=await self._get_workspace_path(),
             )
+
             # Extract atomic facts in background (non-blocking)
             asyncio.create_task(self._extract_and_save_facts(combined, user_id))
-            return {"status": "success", "data": {"memory_id": memory_id, "session_id": self._current_session_id}}
+            return {"status": "success", "data": {"narrative_id": narrative_id, "session_id": self._current_session_id}}
         except MemoryMeshError as e:
             logger.error("Save context pair failed: %s", e)
             return {"status": "error", "error": str(e)}
@@ -408,6 +421,43 @@ class ToolHandlers:
             logger.error("Get session context failed: %s", e)
             return {"status": "error", "error": str(e)}
 
+    async def _get_bootstrap_scaffold(self, user_id: str, workspace_path: str) -> str | None:
+        """Recall L1 bootstrap or latest context via 3-tier fallback, format scaffold."""
+        uid = user_id or self.manager.config.default_user_id
+        try:
+            results, tier_used, _ = await self.manager.search_with_fallback(
+                query="workspace state project bootstrap",
+                top_k=3,
+                user_id=uid,
+                workspace_path=workspace_path or await self._get_workspace_path(),
+                max_tokens=800,
+                min_score_threshold=0.3,
+            )
+            if not results:
+                return None
+
+            best = results[0]
+            source_label = {
+                "semantic": "previous session",
+                "fts_keyword": "keyword match",
+                "chronological": "most recent activity",
+                "empty": "none",
+            }.get(tier_used, "memory")
+
+            return (
+                f"\n\n=== RECOVERED WORKSPACE CONTEXT (from {source_label}) ===\n"
+                f"{best.get('content', '')[:800]}\n"
+                "=== END WORKSPACE CONTEXT ===\n\n"
+                "COGNITIVE INSTRUCTION:\n"
+                "1. If the user references past work, decisions, or unresolved issues, "
+                "you MUST call `recall(query)` to retrieve full context before answering.\n"
+                "2. The summary above is a condensed snapshot. Use `recall` for details.\n"
+                "3. Treat this summary as trusted ground truth about the project state."
+            )
+        except Exception as e:
+            logger.warning("Bootstrap scaffold failed: %s", e)
+            return None
+
     async def handle_new_session(self, args: dict) -> dict:
         try:
             user_id = args.get("user_id", self.manager.config.default_user_id)
@@ -434,59 +484,24 @@ class ToolHandlers:
             else:
                 memory_id = None
 
-            # L1 Bootstrap auto-inject: recall the latest bootstrap snapshot
-            asyncio.create_task(self._auto_inject_bootstrap(session_id, user_id, workspace_path))
+            # L1 Bootstrap — recall synchronously and return in response so model sees it
+            scaffold = await self._get_bootstrap_scaffold(user_id, workspace_path)
             asyncio.create_task(self._auto_scan_codebase(workspace_path, user_id))
             await self._log_context("assistant", f"New session created: {session_id}", "new_session", str(args))
-            return {
-                "status": "success",
-                "data": {
-                    "session_id": session_id,
-                    "memory_id": memory_id,
-                    "message": "Session mới đã được tạo",
-                },
+
+            data = {
+                "session_id": session_id,
+                "memory_id": memory_id,
+                "message": "Session mới đã được tạo",
+                "recall_instruction": RECALL_INSTRUCTION,
             }
+            if scaffold:
+                data["bootstrap_context"] = scaffold
+                _log_bg("Bootstrap", f"Injected into new_session response", emoji="")
+            return {"status": "success", "data": data}
         except MemoryMeshError as e:
             logger.error("New session failed: %s", e)
             return {"status": "error", "error": str(e)}
-
-    async def _auto_inject_bootstrap(self, session_id: str, user_id: str, workspace_path: str):
-        """Recall L1 bootstrap snapshot and inject it into session context."""
-        uid = user_id or self.manager.config.default_user_id
-        try:
-            results = await self.manager.search_memory(
-                query="workspace state project bootstrap",
-                top_k=3,
-                user_id=uid,
-                level_filter=["knowledge"],
-                workspace_path=workspace_path or await self._get_workspace_path(),
-            )
-            bootstrap_memories = [
-                r for r in results
-                if "bootstrap" in (r.tags or []) or "workspace_state" in (r.tags or [])
-            ]
-            if not bootstrap_memories:
-                logger.debug("No bootstrap snapshot found for session %s", session_id)
-                return
-
-            best = bootstrap_memories[0]
-            scaffold = (
-                "\n\n=== WORKSPACE STATE SUMMARY (from previous session) ===\n"
-                f"{best.content[:800]}\n"
-                "=== END WORKSPACE STATE ===\n\n"
-                "COGNITIVE INSTRUCTION:\n"
-                "1. If the user references past work, decisions, or unresolved issues, "
-                "you MUST call `recall(query)` to retrieve full context before answering.\n"
-                "2. The summary above is a condensed snapshot. Use `recall` for details.\n"
-                "3. Treat this summary as trusted ground truth about the project state."
-            )
-
-            await self.session_store.log_context(
-                session_id, "assistant", scaffold, "bootstrap_inject",
-            )
-            _log_bg("Bootstrap", f"Injected into session {session_id[:8]} from memory {best.id[:12]}", emoji="")
-        except Exception as e:
-            logger.warning("L1 bootstrap injection failed: %s", e)
 
     async def handle_end_session(self, args: dict) -> dict:
         try:

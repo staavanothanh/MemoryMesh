@@ -121,3 +121,45 @@ async def test_sanitize_special_chars(fts):
     await fts.add("id1", "test data", "user1")
     results = await fts.search("test!!! data***", "user1", limit=10)
     assert len(results) >= 1
+
+
+@pytest.mark.asyncio
+async def test_list_recent_returns_newest_first(fts):
+    await fts.add("id1", "oldest", "user1")
+    await fts.add("id2", "middle", "user1")
+    await fts.add("id3", "newest", "user1")
+    results = await fts.list_recent("user1", limit=10)
+    assert len(results) >= 3
+    assert results[0]["id"] == "id3"
+    assert results[-1]["id"] == "id1"
+
+
+@pytest.mark.asyncio
+async def test_list_recent_respects_limit(fts):
+    for i in range(5):
+        await fts.add(f"id{i}", f"content{i}", "user1")
+    results = await fts.list_recent("user1", limit=2)
+    assert len(results) == 2
+
+
+@pytest.mark.asyncio
+async def test_list_recent_filters_by_user(fts):
+    await fts.add("id1", "user1 data", "user1")
+    await fts.add("id2", "user2 data", "user2")
+    results = await fts.list_recent("user1", limit=10)
+    assert all(r["id"] == "id1" for r in results)
+
+
+@pytest.mark.asyncio
+async def test_list_recent_filters_by_level(fts):
+    await fts.add("id1", "session data", "user1", level="session")
+    await fts.add("id2", "knowledge data", "user1", level="knowledge")
+    results = await fts.list_recent("user1", limit=10, level_filter=["session"])
+    assert len(results) == 1
+    assert results[0]["id"] == "id1"
+
+
+@pytest.mark.asyncio
+async def test_list_recent_empty_for_unknown_user(fts):
+    results = await fts.list_recent("nonexistent", limit=10)
+    assert results == []

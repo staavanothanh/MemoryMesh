@@ -21,9 +21,11 @@ BOOTSTRAP_SNAPSHOT_PROMPT = """You are a workspace state condenser. Below is a c
 
 Extract a structured summary of ONLY what is explicitly discussed. Return a JSON object with these fields:
 - project_identity: what project/repo was being worked on (max 20 words)
+- discussion_topic: the main topic or narrative of this session (max 50 words)
 - architectural_decisions: key architecture/design decisions made (max 50 words)
 - last_milestone: what was accomplished this session (max 50 words)
-- open_impediments: unresolved issues or next steps mentioned (max 50 words)
+- open_impediments: unresolved issues or blockers mentioned (max 50 words)
+- next_steps: planned next actions or priorities (max 50 words)
 
 Rules:
 - Only include information EXPLICITLY present in the log

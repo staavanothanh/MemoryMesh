@@ -114,6 +114,37 @@ class FTSBackend:
         rows = await cursor.fetchall()
         return [row["memory_id"] for row in rows]
 
+    async def list_recent(
+        self, user_id: str, limit: int = 10,
+        level_filter: Optional[List[str]] = None,
+    ) -> List[Dict[str, Any]]:
+        """Chronological fallback — sort by insert order (rowid DESC)."""
+        if level_filter:
+            placeholders = ",".join("?" for _ in level_filter)
+            sql = f"""
+                SELECT memory_id, content, rowid
+                FROM memory_fts
+                WHERE user_id = ? AND level IN ({placeholders})
+                ORDER BY rowid DESC
+                LIMIT ?
+            """
+            params = (user_id, *level_filter, limit)
+        else:
+            sql = """
+                SELECT memory_id, content, rowid
+                FROM memory_fts
+                WHERE user_id = ?
+                ORDER BY rowid DESC
+                LIMIT ?
+            """
+            params = (user_id, limit)
+        cursor = await self._db.execute(sql, params)
+        rows = await cursor.fetchall()
+        return [
+            {"id": row["memory_id"], "content": row["content"], "score": 0.0}
+            for row in rows
+        ]
+
     async def reindex(self, memory_id: str, content: str, user_id: str, level: str = "user"):
         await self._db.execute(
             "INSERT OR REPLACE INTO memory_fts (memory_id, user_id, level, content) VALUES (?, ?, ?, ?)",
