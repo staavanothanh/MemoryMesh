@@ -30,35 +30,27 @@ class RouterClient:
             return await self._call_llm_impl(prompt, model)
 
     async def _call_llm_impl(self, prompt: str, model: Optional[str] = None) -> str:
-        # Circuit breaker: check BEFORE making any call
         if self._failure_count >= 3:
             raise LLMUnavailableError("Circuit breaker open: too many failures")
 
-        model = model or self.config.default_model
-        models_to_try = [model]
-        if model != self.config.fallback_model:
-            models_to_try.append(self.config.fallback_model)
+        primary = model or self.config.default_model
+        fallback = self.config.fallback_model
+        models_to_try = [primary] if primary == fallback else [primary, fallback]
 
         last_error = None
-        for attempt in range(self.config.max_retries):
-            try:
-                return await self._call(model, prompt)
-            except RouterError as e:
-                logger.warning("LLM call failed (attempt %d/%d): %s", attempt+1, self.config.max_retries, e)
-                last_error = e
-                if attempt == self.config.max_retries - 1:
-                    if len(models_to_try) > 1:
-                        model = self.config.fallback_model
-                        try:
-                            return await self._call(model, prompt)
-                        except RouterError as e2:
-                            last_error = e2
-                await asyncio.sleep(2 ** attempt)
+        for m in models_to_try:
+            for attempt in range(self.config.max_retries):
+                try:
+                    return await self._call(m, prompt)
+                except RouterError as e:
+                    last_error = e
+                    logger.warning("LLM call failed (model=%s, attempt %d/%d): %s", m, attempt+1, self.config.max_retries, e)
+                    await asyncio.sleep(2 ** attempt)
 
         self._failure_count += 1
         if self._failure_count >= 3:
             raise LLMUnavailableError("Circuit breaker open: too many failures")
-        raise last_error or RouterError(model, self.config.max_retries, "Unknown error")
+        raise last_error or RouterError(primary, self.config.max_retries, "Unknown error")
 
     async def _call(self, model: str, prompt: str) -> str:
         try:

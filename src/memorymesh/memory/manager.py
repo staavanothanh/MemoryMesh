@@ -33,12 +33,25 @@ class MemoryManager:
         self.router = router
         self.hooks = hooks
         self._write_lock = asyncio.Lock()
-        self._tokenizer = tiktoken.get_encoding("cl100k_base")  # phù hợp DeepSeek
+        self._tokenizer = tiktoken.get_encoding("cl100k_base")
         self._consolidator = ConsolidationEngine(config, backend, router)
         self.instinct_store = InstinctStore(config.instinct.db_path)
         self.instinct_engine = InstinctEngine(config, backend, self.instinct_store)
         self._last_consolidation: dict[str, float] = {}
         self._last_fact_resolution: dict[str, float] = {}
+        self._background_tasks: set[asyncio.Task] = set()
+
+    def _create_tracked_task(self, coro) -> asyncio.Task:
+        task = asyncio.create_task(coro)
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
+        return task
+
+    async def shutdown(self):
+        for task in self._background_tasks:
+            task.cancel()
+        if self._background_tasks:
+            await asyncio.gather(*self._background_tasks, return_exceptions=True)
 
     @staticmethod
     def _is_workspace_visible(memory_path: Optional[str], current_path: str) -> bool:
@@ -91,7 +104,7 @@ class MemoryManager:
                 for s in suggestions.get("suggested_tags", []):
                     if s["tag"] not in tags and s["confidence"] > 0.5:
                         tags.append(s["tag"])
-                        asyncio.create_task(self.instinct_engine.reinforce_instinct(s["instinct_id"], success=True))
+                        self._create_tracked_task(self.instinct_engine.reinforce_instinct(s["instinct_id"], success=True))
             except Exception as e:
                 logger.warning("Instinct suggestion failed: %s", e)
 
@@ -113,11 +126,11 @@ class MemoryManager:
         logger.info("Memory saved: %s", memory_id)
 
         # Background tasks with rate-limiting
-        asyncio.create_task(self._run_background_tasks(memory_id, text, level, user_id))
+        self._create_tracked_task(self._run_background_tasks(memory_id, text, level, user_id))
 
         # Trigger post-tool hooks
         if self.hooks:
-            asyncio.create_task(
+            self._create_tracked_task(
                 self.hooks.trigger("after_remember", memory_id=memory_id, user_id=user_id)
             )
 
@@ -129,23 +142,23 @@ class MemoryManager:
 
         # 1. Enrichment: skip for session-level (chat logs, auto-logs)
         if level != "session":
-            asyncio.create_task(self._enrich_memory(memory_id, text, user_id))
+            self._create_tracked_task(self._enrich_memory(memory_id, text, user_id))
 
         # 2. Instinct learning: lightweight, no LLM
         if self.config.instinct.enabled:
-            asyncio.create_task(self._maybe_learn_instincts(user_id))
+            self._create_tracked_task(self._maybe_learn_instincts(user_id))
 
         # 3. Consolidation: rate-limited (max once per 60s per user)
         last_c = self._last_consolidation.get(user_id, 0)
         if now - last_c >= 60:
             self._last_consolidation[user_id] = now
-            asyncio.create_task(self._maybe_consolidate(user_id))
+            self._create_tracked_task(self._maybe_consolidate(user_id))
 
         # 4. Fact resolution: rate-limited (max once per 120s per user)
         last_f = self._last_fact_resolution.get(user_id, 0)
         if now - last_f >= 120:
             self._last_fact_resolution[user_id] = now
-            asyncio.create_task(self._maybe_resolve_facts(user_id))
+            self._create_tracked_task(self._maybe_resolve_facts(user_id))
 
     async def _enrich_memory(self, memory_id: str, text: str, user_id: str):
         """Call LLM to get tags, importance, summary and update memory metadata."""

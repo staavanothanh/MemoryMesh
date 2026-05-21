@@ -6,6 +6,7 @@ import shutil
 from memorymesh.config import AppConfig, RouterConfig, ChromaConfig, FTSConfig, ConsolidationConfig, SessionConfig
 from memorymesh.router import RouterClient
 from memorymesh.memory.chroma_impl import ChromaMemoryBackend
+from memorymesh.memory.hybrid_backend import HybridBackend
 from memorymesh.memory.manager import MemoryManager
 
 
@@ -74,5 +75,15 @@ def router_client(router_config):
 
 
 @pytest.fixture
-def memory_manager(app_config, chroma_backend, router_client):
-    return MemoryManager(app_config, chroma_backend, router_client)
+async def hybrid_backend(app_config):
+    backend = HybridBackend(app_config)
+    await backend.initialize()
+    yield backend
+    await backend.close()
+
+
+@pytest.fixture
+async def memory_manager(app_config, hybrid_backend, router_client):
+    mgr = MemoryManager(app_config, hybrid_backend, router_client)
+    yield mgr
+    await mgr.shutdown()

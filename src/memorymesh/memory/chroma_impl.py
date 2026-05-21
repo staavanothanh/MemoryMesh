@@ -50,12 +50,14 @@ class ChromaMemoryBackend:
         await asyncio.to_thread(self._log_action, "add", memory_id, user_id, content)
         return memory_id
 
+    async def _get(self, **kwargs):
+        def _call():
+            return self.memories.get(**kwargs)
+        return await asyncio.to_thread(_call)
+
     async def update_metadata(self, memory_id: str, metadata: Dict[str, Any]) -> bool:
         try:
-            def _get():
-                return self.memories.get(ids=[memory_id])
-
-            existing = await asyncio.to_thread(_get)
+            existing = await self._get(ids=[memory_id])
             if not existing["ids"]:
                 logger.warning("Memory %s not found for metadata update", memory_id)
                 return False
@@ -117,10 +119,7 @@ class ChromaMemoryBackend:
 
     async def update(self, memory_id: str, content: str, metadata: Dict[str, Any]) -> bool:
         try:
-            def _get():
-                return self.memories.get(ids=[memory_id])
-
-            existing = await asyncio.to_thread(_get)
+            existing = await self._get(ids=[memory_id])
             if not existing["ids"]:
                 logger.warning("Memory %s not found for update", memory_id)
                 return False
@@ -144,15 +143,12 @@ class ChromaMemoryBackend:
     async def get_with_embeddings(
         self, user_id: str, limit: int = 1000, offset: int = 0
     ) -> List[Dict[str, Any]]:
-        def _get():
-            return self.memories.get(
-                where={"user_id": user_id},
-                limit=limit,
-                offset=offset,
-                include=["embeddings", "documents", "metadatas"],
-            )
-
-        results = await asyncio.to_thread(_get)
+        results = await self._get(
+            where={"user_id": user_id},
+            limit=limit,
+            offset=offset,
+            include=["embeddings", "documents", "metadatas"],
+        )
         return [
             {
                 "id": results["ids"][i],
@@ -166,14 +162,11 @@ class ChromaMemoryBackend:
     async def list_all(
         self, user_id: str, limit: int = 100, offset: int = 0
     ) -> List[Dict[str, Any]]:
-        def _get():
-            return self.memories.get(
-                where={"user_id": user_id},
-                limit=limit,
-                offset=offset,
-            )
-
-        all_data = await asyncio.to_thread(_get)
+        all_data = await self._get(
+            where={"user_id": user_id},
+            limit=limit,
+            offset=offset,
+        )
         memories = []
         for i, mem_id in enumerate(all_data["ids"]):
             memories.append({

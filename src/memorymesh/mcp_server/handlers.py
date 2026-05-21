@@ -37,24 +37,30 @@ class ToolHandlers:
                 self._cached_workspace = ""
         return self._cached_workspace or ""
 
-    async def _auto_log(self, role: str, content: str, tool_name: str = "", tool_args: str = "", save_memory: bool = False):
+    async def _log_context(self, role: str, content: str, tool_name: str = "", tool_args: str = ""):
         if self._current_session_id:
             try:
                 await self.session_store.log_context(self._current_session_id, role, content, tool_name, tool_args)
-                if save_memory and role in ("user", "assistant") and content.strip():
-                    tags = ["conversation", "session", role]
-                    if tool_name:
-                        tags.append(tool_name)
-                    await self.manager.add_memory(
-                        text=f"[{role}] {content[:500]}",
-                        tags=tags,
-                        importance=4 if tool_name else 3,
-                        level="session",
-                        user_id=self.manager.config.default_user_id,
-                        workspace_path=await self._get_workspace_path(),
-                    )
             except Exception as e:
-                logger.warning("Auto-log failed: %s", e)
+                logger.warning("Context log failed: %s", e)
+
+    async def _save_context_memory(self, role: str, content: str, tool_name: str = ""):
+        if not (self._current_session_id and role in ("user", "assistant") and content.strip()):
+            return
+        try:
+            tags = ["conversation", "session", role]
+            if tool_name:
+                tags.append(tool_name)
+            await self.manager.add_memory(
+                text=f"[{role}] {content[:500]}",
+                tags=tags,
+                importance=4 if tool_name else 3,
+                level="session",
+                user_id=self.manager.config.default_user_id,
+                workspace_path=await self._get_workspace_path(),
+            )
+        except Exception as e:
+            logger.warning("Context memory save failed: %s", e)
 
     async def _auto_scan_codebase(self, workspace_path: str = "", user_id: str = ""):
         try:
@@ -162,7 +168,7 @@ class ToolHandlers:
                 user_id=args.get("user_id"),
                 workspace_path=wp if wp else args.get("workspace_path"),
             )
-            await self._auto_log("assistant", f"Saved memory: {args['content'][:200]}", "remember", str(args))
+            await self._log_context("assistant", f"Saved memory: {args['content'][:200]}", "remember", str(args))
             return {"status": "success", "data": {"id": memory_id}}
         except MemoryMeshError as e:
             logger.error("Remember failed: %s", e)
@@ -177,7 +183,8 @@ class ToolHandlers:
                 user_id=args.get("user_id"),
                 workspace_path=wp,
             )
-            await self._auto_log("assistant", f"Recalled {len(results)} memories for: {args['query'][:200]}", "recall", str(args), save_memory=True)
+            await self._log_context("assistant", f"Recalled {len(results)} memories for: {args['query'][:200]}", "recall", str(args))
+            await self._save_context_memory("assistant", f"Recalled {len(results)} memories for: {args['query'][:200]}", "recall")
             # Format as atomic fact bullets for clarity
             formatted = []
             for r in results:
@@ -242,8 +249,10 @@ class ToolHandlers:
             user_msg = args["user_message"]
             asst_msg = args["assistant_message"]
             combined = f"User: {user_msg}\nAssistant: {asst_msg}"
-            await self._auto_log("user", user_msg, save_memory=True)
-            await self._auto_log("assistant", asst_msg, save_memory=True)
+            await self._log_context("user", user_msg)
+            await self._save_context_memory("user", user_msg)
+            await self._log_context("assistant", asst_msg)
+            await self._save_context_memory("assistant", asst_msg)
             memory_id = await self.manager.add_memory(
                 text=combined,
                 tags=["conversation", "session"],
@@ -309,7 +318,7 @@ class ToolHandlers:
             else:
                 memory_id = None
             asyncio.create_task(self._auto_scan_codebase(workspace_path, user_id))
-            await self._auto_log("assistant", f"New session created: {session_id}", "new_session", str(args))
+            await self._log_context("assistant", f"New session created: {session_id}", "new_session", str(args))
             return {
                 "status": "success",
                 "data": {
@@ -333,7 +342,7 @@ class ToolHandlers:
             await self.session_store.end_session(session_id)
             if session_id == self._current_session_id:
                 self._current_session_id = ""
-            await self._auto_log("assistant", f"Session ended: {session_id}", "end_session", str(args))
+            await self._log_context("assistant", f"Session ended: {session_id}", "end_session", str(args))
             return {"status": "success", "data": {"session_id": session_id, "message": "Session đã kết thúc"}}
         except MemoryMeshError as e:
             logger.error("End session failed: %s", e)
@@ -393,7 +402,7 @@ class ToolHandlers:
                 user_id=user_id,
                 workspace_path=workspace_path,
             )
-            await self._auto_log("assistant", f"Workspace snapshot saved", "save_workspace_context", str(args))
+            await self._log_context("assistant", f"Workspace snapshot saved", "save_workspace_context", str(args))
             return {"status": "success", "data": {"memory_id": memory_id, "snapshot": snapshot}}
         except MemoryMeshError as e:
             logger.error("Save workspace context failed: %s", e)
@@ -420,7 +429,8 @@ class ToolHandlers:
                 workspace_path=await self._get_workspace_path(),
             )
 
-            await self._auto_log("assistant", f"Resumed session {session_id}: {len(context)} messages, {len(memories)} memories", "resume_session", str(args), save_memory=True)
+            await self._log_context("assistant", f"Resumed session {session_id}: {len(context)} messages, {len(memories)} memories", "resume_session", str(args))
+            await self._save_context_memory("assistant", f"Resumed session {session_id}: {len(context)} messages, {len(memories)} memories", "resume_session")
 
             return {
                 "status": "success",

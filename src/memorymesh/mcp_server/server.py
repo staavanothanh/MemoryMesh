@@ -72,6 +72,7 @@ class MemoryMeshServer:
         self.handlers = ToolHandlers(self.manager, self.session_store)
         self.mcp_server = Server("memorymesh")
         self._shutdown_event = asyncio.Event()
+        self._background_tasks: set[asyncio.Task] = set()
         self._register_tools()
 
     def _init_options(self):
@@ -105,6 +106,12 @@ class MemoryMeshServer:
                 raise ValueError(f"Unknown tool: {name}")
             result = await handler(arguments)
             return [TextContent(type="text", text=json.dumps(result, ensure_ascii=False))]
+
+    def _create_tracked_task(self, coro) -> asyncio.Task:
+        task = asyncio.create_task(coro)
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
+        return task
 
     async def _initialize_fast(self):
         """Fast init: open DBs and create a fresh session."""
@@ -143,12 +150,16 @@ class MemoryMeshServer:
             await self.router.close()
         except Exception as e:
             logger.warning("Router close error: %s", e)
+        try:
+            await self.manager.shutdown()
+        except Exception as e:
+            logger.warning("Manager shutdown error: %s", e)
         logger.info("Shutdown complete")
 
     async def run_stdio(self):
         await self._initialize_fast()
         async with stdio_server() as (read_stream, write_stream):
-            asyncio.create_task(self._initialize_slow())
+            self._create_tracked_task(self._initialize_slow())
             await self.mcp_server.run(
                 read_stream,
                 write_stream,

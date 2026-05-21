@@ -1,9 +1,10 @@
 """Memory consolidation engine — detect similar memories, merge via LLM."""
 
+import asyncio
 import json
 import logging
 from datetime import datetime, timezone
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 
 from ..config import AppConfig
 from ..router import RouterClient
@@ -76,8 +77,9 @@ class ConsolidationEngine:
         return dot / (na * nb)
 
     def _find_clusters(
-        self, memories: List[Dict[str, Any]]
+        self, memories: List[Dict[str, Any]], threshold: Optional[float] = None
     ) -> List[List[Dict[str, Any]]]:
+        t = threshold if threshold is not None else self.threshold
         n = len(memories)
         sim_matrix = [[0.0] * n for _ in range(n)]
         for i in range(n):
@@ -95,7 +97,7 @@ class ConsolidationEngine:
             cluster = [memories[i]]
             visited[i] = True
             for j in range(i + 1, n):
-                if not visited[j] and sim_matrix[i][j] >= self.threshold:
+                if not visited[j] and sim_matrix[i][j] >= t:
                     cluster.append(memories[j])
                     visited[j] = True
             clusters.append(cluster)
@@ -146,32 +148,6 @@ class ConsolidationEngine:
 
         except Exception as e:
             logger.error("Cluster merge failed: %s", e)
-
-    async def _find_fact_groups(
-        self, memories: List[Dict[str, Any]]
-    ) -> List[List[Dict[str, Any]]]:
-        """Cluster atomic facts by topic (lower threshold)."""
-        n = len(memories)
-        sim_matrix = [[0.0] * n for _ in range(n)]
-        for i in range(n):
-            sim_matrix[i][i] = 1.0
-            for j in range(i + 1, n):
-                sim = self._cosine_sim(memories[i]["embedding"], memories[j]["embedding"])
-                sim_matrix[i][j] = sim
-                sim_matrix[j][i] = sim
-        visited = [False] * n
-        clusters = []
-        for i in range(n):
-            if visited[i]:
-                continue
-            cluster = [memories[i]]
-            visited[i] = True
-            for j in range(i + 1, n):
-                if not visited[j] and sim_matrix[i][j] >= self._fact_threshold:
-                    cluster.append(memories[j])
-                    visited[j] = True
-            clusters.append(cluster)
-        return clusters
 
     async def _resolve_fact_contradictions(
         self, group: List[Dict[str, Any]], user_id: str
@@ -230,7 +206,7 @@ class ConsolidationEngine:
         ]
         if len(active_facts) < 2:
             return 0
-        groups = await self._find_fact_groups(active_facts)
+        groups = await asyncio.to_thread(self._find_clusters, active_facts, self._fact_threshold)
         resolved_count = 0
         for group in groups:
             if len(group) >= 2:
@@ -252,7 +228,7 @@ class ConsolidationEngine:
         if len(active) < self.min_cluster_size:
             return 0
 
-        clusters = self._find_clusters(active)
+        clusters = await asyncio.to_thread(self._find_clusters, active)
         merged_count = 0
         for cluster in clusters:
             if len(cluster) >= self.min_cluster_size:

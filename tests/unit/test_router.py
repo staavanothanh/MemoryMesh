@@ -39,6 +39,7 @@ async def test_call_llm_success(client):
 async def test_call_llm_retry_then_fallback(client):
     responses = [
         MagicMock(status_code=500, text="Server Error"),
+        MagicMock(status_code=500, text="Server Error"),
         MagicMock(status_code=200, text='{"choices":[{"message":{"content":"Fallback OK"}}]}',
                   json=MagicMock(return_value={"choices": [{"message": {"content": "Fallback OK"}}]})),
     ]
