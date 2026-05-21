@@ -159,6 +159,25 @@ class ChromaMemoryBackend:
             for i in range(len(results["ids"]))
         ]
 
+    async def get_with_embeddings_by_ids(
+        self, ids: List[str]
+    ) -> List[Dict[str, Any]]:
+        results = await self._get(
+            ids=ids,
+            include=["embeddings", "documents", "metadatas"],
+        )
+        return [
+            {
+                "id": results["ids"][i],
+                "user_id": results["metadatas"][i].get("user_id", "") if results["metadatas"][i] else "",
+                "content": results["documents"][i],
+                "embedding": results["embeddings"][i],
+                "metadata": results["metadatas"][i],
+                "level": results["metadatas"][i].get("level", "user") if results["metadatas"][i] else "user",
+            }
+            for i in range(len(results["ids"]))
+        ]
+
     async def list_all(
         self, user_id: str, limit: int = 100, offset: int = 0
     ) -> List[Dict[str, Any]]:

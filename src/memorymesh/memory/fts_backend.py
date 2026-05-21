@@ -108,3 +108,15 @@ class FTSBackend:
         except Exception as e:
             logger.warning("FTS delete failed for %s: %s", memory_id, e)
             return False
+
+    async def get_all_ids(self) -> List[str]:
+        cursor = await self._db.execute("SELECT memory_id FROM memory_fts")
+        rows = await cursor.fetchall()
+        return [row["memory_id"] for row in rows]
+
+    async def reindex(self, memory_id: str, content: str, user_id: str, level: str = "user"):
+        await self._db.execute(
+            "INSERT OR REPLACE INTO memory_fts (memory_id, user_id, level, content) VALUES (?, ?, ?, ?)",
+            (memory_id, user_id, level, content),
+        )
+        await self._db.commit()

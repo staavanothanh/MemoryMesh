@@ -9,19 +9,23 @@ Tech stack: Python 3.12+, ChromaDB, SQLite FTS5, asyncio, sentence-transformers,
 ## Architecture
 
 ```
-User -> OpenCode CLI -> LLM (deepseek-v4-flash via 9Router)
-                         |
-                         +-> recall(query) tool  -> MemoryMesh MCP Server
-                         |                          +-> chroma_impl (vector search)
-                         |                          +-> fts_backend  (keyword search)
-                         |                          +-> hybrid_utils (RRF fusion)
-                         |
-                         +-> save_context_pair -> MemoryMesh -> atomic fact extraction
+Session Start ──> L1 Bootstrapper ──> Inject state summary (~1k tokens) into context
+                     │
+User Request ───────> LLM ──────────────> If dangling reference detected
+                                              │
+                                              └──> recall(query) ──> L2 Dynamic Recall
+                                                                       (token-budgeted, max 3k)
+                                                                       │
+                                                                  ChromaDB + FTS5 (hybrid)
+
+Session End ─────────> L1 Compaction ───> Create bootstrap snapshot (tag="bootstrap")
 ```
 
 - **Main chat** goes directly from OpenCode to 9Router, NOT through MemoryMesh
 - **MemoryMesh** is purely a background MCP server: it enriches, consolidates, and retrieves memories
-- **Session context starts empty** — LLM must call `recall` on demand (dynamic recall)
+- **L1 Bootstrap**: `end_session` creates a compacted summary; `new_session` auto-injects it as context
+- **L2 Dynamic Recall**: triggered by LLM's `recall` call, guarded by token budget (default 1000 tokens)
+- **Gated writes**: ChromaDB + FTS5 kept in sync with rollback + background reconciliation
 
 ## 15 MCP Tools
 
@@ -49,12 +53,18 @@ User -> OpenCode CLI -> LLM (deepseek-v4-flash via 9Router)
 2. **Type hints**: All functions MUST have complete type annotations.
 3. **Error handling**: Use `MemoryMeshError` hierarchy from `errors.py`. No bare `except Exception`.
 4. **Background tasks**: Use `manager._create_tracked_task()` instead of raw `asyncio.create_task()`. Tasks are tracked in a set and cancelled on shutdown.
-5. **Rate-limiting**: All expensive background ops (consolidation 60s, fact resolution 120s, expiry 60s) are rate-limited per user.
+5. **Rate-limiting**: All expensive background ops (consolidation 60s, fact resolution 120s, expiry 60s, FTS reconcile 300s) are rate-limited per user.
 6. **Workspace isolation**: Memories tagged with `workspace_path`; hierarchical visibility (siblings visible, parent→children visible, child→parent invisible).
 7. **Soft delete**: `forget` and `archive` mark `archived=True`; archived memories excluded from recall/list. Use `unarchive_memory` to restore.
 8. **Memory expiry**: Session-level memories older than `session_memory_ttl_days` (default 7) are auto-expired.
 9. **List/recall filters**: Consolidated, expired, and archived memories are filtered out automatically.
 10. **Fact batching**: Up to 3 conversation pairs are batched into a single LLM call for atomic fact extraction.
+11. **Gated write**: HybridBackend writes ChromaDB first, FTS5 second, rollback chroma if FTS fails. Prevents data drift.
+12. **FTS reconciliation**: Background task (300s interval) re-indexes orphaned chroma entries and cleans stale FTS entries.
+13. **L1 bootstrap**: `end_session` creates a compacted workspace snapshot (~1k tokens, tag `bootstrap`). `new_session` auto-injects it into context.
+14. **Token budget**: Recall enforces configurable `token_budget` (default 1000). Optional `max_tokens` param overrides.
+15. **Ingest compaction**: Atomic facts truncated to 150 tokens max. Each fact includes `relation` metadata.
+16. **ANSI logging**: Background ops use structured colored logs (`[MemoryMesh]` prefix).
 
 ## Data Storage
 

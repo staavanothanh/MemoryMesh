@@ -19,7 +19,17 @@ from .instinct_store import InstinctStore
 from .instinct import InstinctEngine
 from ..prompts import EXTRACT_METADATA_PROMPT
 
+_MAGENTA = "\033[1;35m"
+_CYAN = "\033[1;36m"
+_GREEN = "\033[1;32m"
+_RESET = "\033[0m"
+
 logger = logging.getLogger(__name__)
+
+
+def _log_bg(label: str, msg: str, emoji: str = ""):
+    """ANSI-colored structured log for background operations."""
+    logger.info("%s %s[%s]%s %s", emoji, _MAGENTA, label, _RESET, msg)
 
 class MemoryManager:
     def __init__(
@@ -41,6 +51,7 @@ class MemoryManager:
         self._last_consolidation: dict[str, float] = {}
         self._last_fact_resolution: dict[str, float] = {}
         self._last_expiry: dict[str, float] = {}
+        self._last_fts_reconciliation: float = 0.0
         self._background_tasks: set[asyncio.Task] = set()
 
     def _create_tracked_task(self, coro) -> asyncio.Task:
@@ -168,6 +179,9 @@ class MemoryManager:
             self._last_expiry[user_id] = now
             self._create_tracked_task(self._maybe_expire_memories(user_id))
 
+        # 6. FTS reconciliation: rate-limited (max once per 300s regardless of user)
+        self._create_tracked_task(self._maybe_reconcile_fts())
+
     async def _enrich_memory(self, memory_id: str, text: str, user_id: str):
         """Call LLM to get tags, importance, summary and update memory metadata."""
         try:
@@ -195,7 +209,7 @@ class MemoryManager:
         try:
             expired = await self._consolidator.run_expiry(user_id)
             if expired:
-                logger.info("Expired %d old session memories for user %s", expired, user_id)
+                _log_bg("Expiry", f"Expired {expired} old session memories for {user_id}", emoji="")
         except Exception as e:
             logger.warning("Memory expiry failed for user %s: %s", user_id, e)
 
@@ -204,7 +218,7 @@ class MemoryManager:
         try:
             merged = await self._consolidator.run_for_user(user_id)
             if merged:
-                logger.info("Consolidation merged %d clusters for user %s", merged, user_id)
+                _log_bg("Consolidation", f"Merged {merged} clusters for {user_id}", emoji="")
         except Exception as e:
             logger.error("Consolidation failed for user %s: %s", user_id, e)
 
@@ -213,7 +227,7 @@ class MemoryManager:
         try:
             resolved = await self._consolidator.run_fact_consolidation(user_id)
             if resolved:
-                logger.info("Fact contradiction resolved %d groups for user %s", resolved, user_id)
+                _log_bg("FactResolve", f"Resolved {resolved} contradiction groups for {user_id}", emoji="")
         except Exception as e:
             logger.error("Fact consolidation failed for user %s: %s", user_id, e)
 
@@ -223,6 +237,60 @@ class MemoryManager:
             await self.instinct_engine.learn_from_recent(user_id)
         except Exception as e:
             logger.warning("Instinct learning failed for user %s: %s", user_id, e)
+
+    async def _maybe_reconcile_fts(self):
+        """Reconcile FTS index with ChromaDB — re-index orphans, clean stale entries."""
+        now = time.monotonic()
+        if now - self._last_fts_reconciliation < 300:
+            return
+        self._last_fts_reconciliation = now
+
+        try:
+            fts_ids = set(await self.backend.fts.get_all_ids())
+            chroma_ids = set()
+            chroma_entries = {}
+            offset = 0
+            while True:
+                batch = await self.backend.chroma.get_with_embeddings(
+                    user_id="", limit=500, offset=offset
+                )
+                if not batch:
+                    break
+                for entry in batch:
+                    eid = entry["id"]
+                    chroma_ids.add(eid)
+                    chroma_entries[eid] = entry
+                offset += len(batch)
+                if len(batch) < 500:
+                    break
+
+            orphaned_in_fts = fts_ids - chroma_ids
+            for oid in orphaned_in_fts:
+                try:
+                    await self.backend.fts.delete(oid)
+                    logger.info("FTS reconciliation: removed stale entry %s", oid)
+                except Exception as e:
+                    logger.warning("FTS reconciliation: failed to remove stale %s: %s", oid, e)
+
+            missing_from_fts = chroma_ids - fts_ids
+            for mid in missing_from_fts:
+                entry = chroma_entries[mid]
+                meta = entry.get("metadata") or {}
+                content = entry.get("content", "")
+                user_id = meta.get("user_id", "")
+                level = meta.get("level", "user")
+                if not content or not user_id:
+                    continue
+                try:
+                    await self.backend.fts.reindex(mid, content, user_id, level)
+                    logger.info("FTS reconciliation: re-indexed %s", mid)
+                except Exception as e:
+                    logger.warning("FTS reconciliation: failed to re-index %s: %s", mid, e)
+
+            if orphaned_in_fts or missing_from_fts:
+                _log_bg("FTS Reconcile", f"{len(orphaned_in_fts)} stale removed, {len(missing_from_fts)} re-indexed", emoji="")
+        except Exception as e:
+            logger.warning("FTS reconciliation failed: %s", e)
 
     @staticmethod
     def _recency_score(timestamp_str: str) -> float:
@@ -272,6 +340,7 @@ class MemoryManager:
         user_id: str = None,
         level_filter: Optional[List[str]] = None,
         workspace_path: Optional[str] = None,
+        max_tokens: Optional[int] = None,
     ) -> List[SearchResult]:
         """Recall with smart truncation and level-aware weighting."""
         user_id = user_id or self.config.default_user_id
@@ -310,7 +379,7 @@ class MemoryManager:
                 lvl = m.get("metadata", {}).get("level", "user")
                 m["score"] = m["score"] * level_weights.get(lvl, 1.0)
 
-        budget = self.config.token_budget
+        budget = max_tokens if max_tokens is not None else self.config.token_budget
 
         scored = [(self._compute_final_score(m), m) for m in results]
         scored.sort(key=lambda x: x[0], reverse=True)
@@ -322,6 +391,8 @@ class MemoryManager:
             meta_tokens = len(self._tokenizer.encode(meta_str))
             content_tokens = len(self._tokenizer.encode(mem["content"]))
             mem_tokens = meta_tokens + content_tokens
+            if mem_tokens <= 0:
+                continue
             if total_tokens + mem_tokens > budget:
                 available = budget - total_tokens
                 if available > 10:

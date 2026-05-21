@@ -17,14 +17,37 @@ Conversation Log:
 
 Summary:"""
 
-RECALL_INSTRUCTION = """You have access to a long-term memory system via the `recall` tool. Important guidelines:
+BOOTSTRAP_SNAPSHOT_PROMPT = """You are a workspace state condenser. Below is a conversation session log from a software development session. 
 
-1. **Context is empty at session start.** Do NOT expect any preloaded context.
-2. **Recall on demand.** Only call `recall(query)` when the user's message requires information from past sessions.
-3. **Be specific.** Pass a precise, keyword-rich query to `recall` to get the most relevant atomic facts.
-4. **Facts are atomic.** The `recall` tool returns short, standalone facts — not full conversation logs.
-5. **You decide.** If you don't need past context, answer normally without calling recall.
-6. **Trust the facts.** Recalled facts have been extracted and verified from past conversations. Use them as reliable context."""
+Extract a structured summary of ONLY what is explicitly discussed. Return a JSON object with these fields:
+- project_identity: what project/repo was being worked on (max 20 words)
+- architectural_decisions: key architecture/design decisions made (max 50 words)
+- last_milestone: what was accomplished this session (max 50 words)
+- open_impediments: unresolved issues or next steps mentioned (max 50 words)
+
+Rules:
+- Only include information EXPLICITLY present in the log
+- If a field has no information, set it to an empty string
+- Be concise: each field max 50 words
+- Return ONLY valid JSON, no extra text
+
+Conversation Log:
+{log}
+
+Output:"""
+
+RECALL_INSTRUCTION = """CRITICAL: You MUST use the `recall` tool to retrieve past context.
+
+RULES:
+1. When the user references past work — "continue", "as we discussed", "the bug we fixed",
+   "my preferences", "last session", project names, feature names, or any implicit reference
+   to prior activity — you MUST call `recall(query)` BEFORE answering.
+2. Context starts empty at session start. Do NOT rely on your training data for project context.
+3. Use precise, keyword-rich queries: include the user's exact words plus related terms.
+4. Recalled facts have been verified. Trust them as ground truth.
+5. Examples of triggers: "let's continue", "like before", "hôm trước", "cái bug đó",
+   any question about user preferences, project architecture, or past decisions.
+6. ONLY skip recall for purely general knowledge or simple greetings."""
 
 ATOMIC_FACT_EXTRACT_PROMPT = """You are an atomic fact extractor. Below is a conversation between a user and an AI assistant. Extract all standalone, independent facts from this conversation.
 
@@ -39,13 +62,14 @@ Rules:
 Return a JSON object with a "facts" field containing an array of fact objects:
 {{
   "facts": [
-    {{"fact": "short assertion here", "confidence": "high|medium|low", "tags": ["tag1", "tag2"]}},
-    {{"fact": "another assertion", "confidence": "high", "tags": ["tag1"]}}
+    {{"fact": "short assertion here", "confidence": "high|medium|low", "tags": ["tag1", "tag2"], "relation": "HAS_PREFERENCE"}},
+    {{"fact": "another assertion", "confidence": "high", "tags": ["tag1"], "relation": "ARCHITECTURAL_DECISION"}}
   ]
 }}
 
 - confidence: "high" for explicit statements, "medium" for strong implications, "low" for guesses
 - tags: 1-3 relevant category tags (lowercase)
+- relation: one of HAS_PREFERENCE, ARCHITECTURAL_DECISION, RESOLVED_BUG, TECHNICAL_DETAIL, USER_INFO, PROJECT_GOAL, CODE_PATTERN, DEPENDENCY, DESIGN_CHOICE, or empty string if none applies
 - Return ONLY valid JSON, no extra text.
 
 Conversation:
@@ -66,13 +90,14 @@ Rules:
 Return a JSON object with a "facts" field containing an array of fact objects:
 {{
   "facts": [
-    {{"fact": "short assertion here", "confidence": "high|medium|low", "tags": ["tag1", "tag2"]}},
-    {{"fact": "another assertion", "confidence": "high", "tags": ["tag1"]}}
+    {{"fact": "short assertion here", "confidence": "high|medium|low", "tags": ["tag1", "tag2"], "relation": "HAS_PREFERENCE"}},
+    {{"fact": "another assertion", "confidence": "high", "tags": ["tag1"], "relation": "ARCHITECTURAL_DECISION"}}
   ]
 }}
 
 - confidence: "high" for explicit statements, "medium" for strong implications, "low" for guesses
 - tags: 1-3 relevant category tags (lowercase)
+- relation: one of HAS_PREFERENCE, ARCHITECTURAL_DECISION, RESOLVED_BUG, TECHNICAL_DETAIL, USER_INFO, PROJECT_GOAL, CODE_PATTERN, DEPENDENCY, DESIGN_CHOICE, or empty string if none applies
 - Return ONLY valid JSON, no extra text.
 
 Conversations:

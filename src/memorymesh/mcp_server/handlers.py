@@ -8,7 +8,17 @@ from ..memory.session_store import SessionStore
 from ..memory.fact_extractor import FactExtractor
 from ..scanner import CodebaseScanner
 from ..errors import MemoryMeshError
-from ..prompts import RECALL_INSTRUCTION, SESSION_COMPACT_PROMPT
+from ..prompts import RECALL_INSTRUCTION, SESSION_COMPACT_PROMPT, BOOTSTRAP_SNAPSHOT_PROMPT
+
+_MAGENTA = "\033[1;35m"
+_CYAN = "\033[1;36m"
+_GREEN = "\033[1;32m"
+_RESET = "\033[0m"
+
+
+def _log_bg(label: str, msg: str, emoji: str = ""):
+    """ANSI-colored structured log for background operations."""
+    logger.info("%s %s[%s]%s %s", emoji, _MAGENTA, label, _RESET, msg)
 
 logger = logging.getLogger(__name__)
 
@@ -140,6 +150,56 @@ class ToolHandlers:
         except Exception as e:
             logger.warning("Session compaction failed: %s", e)
 
+    async def _create_bootstrap_snapshot(self, session_id: str, user_id: str = ""):
+        """Create L1 bootstrap snapshot (~1k tokens) from session context and save as a bootstrap memory."""
+        uid = user_id or self.manager.config.default_user_id
+        try:
+            log = await self.session_store.get_context_log(session_id, limit=self.manager.config.session.compact_threshold)
+            if len(log) < 3:
+                log_text = f"Session {session_id[:8]} ended with {len(log)} messages."
+            else:
+                log_text = "\n".join(f"{entry['role']}: {entry['content'][:300]}" for entry in log)
+
+            prompt = BOOTSTRAP_SNAPSHOT_PROMPT.format(log=log_text)
+            snapshot_json = ""
+            try:
+                response = await self.manager.router.call_llm(prompt)
+                snapshot_json = response.strip()
+                data = json.loads(snapshot_json)
+            except Exception as e:
+                logger.warning("LLM bootstrap snapshot failed, using fallback: %s", e)
+                data = {
+                    "project_identity": "",
+                    "architectural_decisions": "",
+                    "last_milestone": f"Session {session_id[:8]} ended",
+                    "open_impediments": "",
+                }
+
+            data.setdefault("project_identity", "")
+            data.setdefault("architectural_decisions", "")
+            data.setdefault("last_milestone", f"Session {session_id[:8]} ended")
+            data.setdefault("open_impediments", "")
+
+            summary_parts = []
+            for key in ("project_identity", "architectural_decisions", "last_milestone", "open_impediments"):
+                val = data.get(key, "")
+                if val:
+                    label = key.replace("_", " ").title()
+                    summary_parts.append(f"{label}: {val[:200]}")
+            summary_text = "\n".join(summary_parts) if summary_parts else f"Session {session_id[:8]} ended."
+
+            memory_id = await self.manager.add_memory(
+                text=f"[Bootstrap] {summary_text[:1000]}",
+                tags=["bootstrap", "workspace_state"],
+                importance=5,
+                level="knowledge",
+                user_id=uid,
+                workspace_path=await self._get_workspace_path(),
+            )
+            _log_bg("Bootstrap", f"Snapshot saved for session {session_id[:8]} -> memory={memory_id[:12]}", emoji="")
+        except Exception as e:
+            logger.warning("Bootstrap snapshot failed: %s", e)
+
     async def _flush_fact_buffer(self):
         """Flush buffered conversations to LLM in a single batched call."""
         uid = self.manager.config.default_user_id
@@ -152,6 +212,9 @@ class ToolHandlers:
             facts = await self._fact_extractor.extract_facts_batch(batch)
             for item in facts:
                 fact_tags = item.get("tags", []) + ["atomic_fact", item.get("confidence", "medium")]
+                relation = item.get("relation", "")
+                if relation:
+                    fact_tags.append(f"relation:{relation}")
                 importance = self._fact_extractor._confidence_to_importance(item.get("confidence", "medium"))
                 await self.manager.add_memory(
                     text=item["fact"],
@@ -200,6 +263,7 @@ class ToolHandlers:
                 top_k=args.get("top_k", 10),
                 user_id=args.get("user_id"),
                 workspace_path=wp,
+                max_tokens=args.get("max_tokens"),
             )
             await self._log_context("assistant", f"Recalled {len(results)} memories for: {args['query'][:200]}", "recall", str(args))
             await self._save_context_memory("assistant", f"Recalled {len(results)} memories for: {args['query'][:200]}", "recall")
@@ -369,6 +433,9 @@ class ToolHandlers:
                 )
             else:
                 memory_id = None
+
+            # L1 Bootstrap auto-inject: recall the latest bootstrap snapshot
+            asyncio.create_task(self._auto_inject_bootstrap(session_id, user_id, workspace_path))
             asyncio.create_task(self._auto_scan_codebase(workspace_path, user_id))
             await self._log_context("assistant", f"New session created: {session_id}", "new_session", str(args))
             return {
@@ -383,6 +450,44 @@ class ToolHandlers:
             logger.error("New session failed: %s", e)
             return {"status": "error", "error": str(e)}
 
+    async def _auto_inject_bootstrap(self, session_id: str, user_id: str, workspace_path: str):
+        """Recall L1 bootstrap snapshot and inject it into session context."""
+        uid = user_id or self.manager.config.default_user_id
+        try:
+            results = await self.manager.search_memory(
+                query="workspace state project bootstrap",
+                top_k=3,
+                user_id=uid,
+                level_filter=["knowledge"],
+                workspace_path=workspace_path or await self._get_workspace_path(),
+            )
+            bootstrap_memories = [
+                r for r in results
+                if "bootstrap" in (r.tags or []) or "workspace_state" in (r.tags or [])
+            ]
+            if not bootstrap_memories:
+                logger.debug("No bootstrap snapshot found for session %s", session_id)
+                return
+
+            best = bootstrap_memories[0]
+            scaffold = (
+                "\n\n=== WORKSPACE STATE SUMMARY (from previous session) ===\n"
+                f"{best.content[:800]}\n"
+                "=== END WORKSPACE STATE ===\n\n"
+                "COGNITIVE INSTRUCTION:\n"
+                "1. If the user references past work, decisions, or unresolved issues, "
+                "you MUST call `recall(query)` to retrieve full context before answering.\n"
+                "2. The summary above is a condensed snapshot. Use `recall` for details.\n"
+                "3. Treat this summary as trusted ground truth about the project state."
+            )
+
+            await self.session_store.log_context(
+                session_id, "assistant", scaffold, "bootstrap_inject",
+            )
+            _log_bg("Bootstrap", f"Injected into session {session_id[:8]} from memory {best.id[:12]}", emoji="")
+        except Exception as e:
+            logger.warning("L1 bootstrap injection failed: %s", e)
+
     async def handle_end_session(self, args: dict) -> dict:
         try:
             session_id = args.get("session_id", self._current_session_id)
@@ -391,6 +496,7 @@ class ToolHandlers:
                 return {"status": "error", "error": "No active session to end"}
             if self.manager.config.session.auto_compact_on_end:
                 await self._compact_session(session_id, user_id)
+            await self._create_bootstrap_snapshot(session_id, user_id)
             await self._flush_fact_buffer()
             await self.session_store.end_session(session_id)
             if session_id == self._current_session_id:

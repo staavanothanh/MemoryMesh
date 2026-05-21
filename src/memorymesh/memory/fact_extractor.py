@@ -4,17 +4,22 @@ import json
 import logging
 from typing import List, Optional, Dict, Any
 
+import tiktoken
+
 from ..config import AppConfig
 from ..router import RouterClient
 from ..prompts import ATOMIC_FACT_EXTRACT_PROMPT, ATOMIC_FACT_BATCH_PROMPT
 
 logger = logging.getLogger(__name__)
 
+_MAX_FACT_TOKENS = 150
+
 
 class FactExtractor:
     def __init__(self, config: AppConfig, router: RouterClient):
         self.config = config
         self.router = router
+        self._tokenizer = tiktoken.get_encoding("cl100k_base")
 
     async def extract_facts(self, conversation: str) -> List[Dict[str, Any]]:
         """Extract atomic facts from a single conversation via LLM."""
@@ -67,10 +72,18 @@ class FactExtractor:
             if norm in seen:
                 continue
             seen.add(norm)
+
+            # Enforce max token length per fact (ingest compaction)
+            tokens = self._tokenizer.encode(fact_text.strip())
+            if len(tokens) > _MAX_FACT_TOKENS:
+                truncated = self._tokenizer.decode(tokens[:_MAX_FACT_TOKENS])
+                fact_text = truncated + "..."
+
             valid.append({
-                "fact": fact_text.strip(),
+                "fact": fact_text,
                 "confidence": item.get("confidence", "medium") if isinstance(item.get("confidence"), str) else "medium",
                 "tags": item.get("tags", []) if isinstance(item.get("tags"), list) else [],
+                "relation": item.get("relation", "") if isinstance(item.get("relation"), str) else "",
             })
         logger.info("FactExtractor: %d raw -> %d unique valid facts", len(raw_facts), len(valid))
         return valid

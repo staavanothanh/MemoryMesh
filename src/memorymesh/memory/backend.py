@@ -45,6 +45,12 @@ class MemoryBackend(Protocol):
         """Get memories with their embeddings for processing (e.g. consolidation)."""
         ...
 
+    async def get_with_embeddings_by_ids(
+        self, ids: List[str]
+    ) -> List[Dict[str, Any]]:
+        """Get specific memories by IDs, with embeddings (for rollback backup)."""
+        ...
+
     async def list_all(
         self, user_id: str, limit: int = 100, offset: int = 0
     ) -> List[Dict[str, Any]]:
