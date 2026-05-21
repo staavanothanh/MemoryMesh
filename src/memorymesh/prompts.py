@@ -37,12 +37,12 @@ Rules:
 - Use the original language of the information (Vietnamese or English)
 
 Return a JSON object with a "facts" field containing an array of fact objects:
-{
+{{
   "facts": [
-    {"fact": "short assertion here", "confidence": "high|medium|low", "tags": ["tag1", "tag2"]},
-    {"fact": "another assertion", "confidence": "high", "tags": ["tag1"]}
+    {{"fact": "short assertion here", "confidence": "high|medium|low", "tags": ["tag1", "tag2"]}},
+    {{"fact": "another assertion", "confidence": "high", "tags": ["tag1"]}}
   ]
-}
+}}
 
 - confidence: "high" for explicit statements, "medium" for strong implications, "low" for guesses
 - tags: 1-3 relevant category tags (lowercase)
