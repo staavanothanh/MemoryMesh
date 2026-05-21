@@ -44,7 +44,7 @@ Return a JSON object with a "facts" field containing an array of fact objects:
   ]
 }
 
-- confidence: "high" for explicit statements, "medium" for strong implications, "low" for猜测
+- confidence: "high" for explicit statements, "medium" for strong implications, "low" for guesses
 - tags: 1-3 relevant category tags (lowercase)
 - Return ONLY valid JSON, no extra text.
 

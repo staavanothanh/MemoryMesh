@@ -248,6 +248,9 @@ class MemoryManager:
                 )
             ]
 
+        # Filter out consolidated memories (already merged into another memory)
+        results = [m for m in results if not m.get("metadata", {}).get("consolidated")]
+
         # Level-weighted scoring when no filter: boost session > user > knowledge
         if not level_filter:
             level_weights = {

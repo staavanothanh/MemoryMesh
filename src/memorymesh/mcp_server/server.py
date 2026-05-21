@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 import signal
 import logging
@@ -103,7 +104,7 @@ class MemoryMeshServer:
             if not handler:
                 raise ValueError(f"Unknown tool: {name}")
             result = await handler(arguments)
-            return [TextContent(type="text", text=str(result))]
+            return [TextContent(type="text", text=json.dumps(result, ensure_ascii=False))]
 
     async def _initialize_fast(self):
         """Fast init: open DBs and create a fresh session."""

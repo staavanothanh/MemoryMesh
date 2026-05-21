@@ -30,6 +30,10 @@ class RouterClient:
             return await self._call_llm_impl(prompt, model)
 
     async def _call_llm_impl(self, prompt: str, model: Optional[str] = None) -> str:
+        # Circuit breaker: check BEFORE making any call
+        if self._failure_count >= 3:
+            raise LLMUnavailableError("Circuit breaker open: too many failures")
+
         model = model or self.config.default_model
         models_to_try = [model]
         if model != self.config.fallback_model:
@@ -43,7 +47,6 @@ class RouterClient:
                 logger.warning("LLM call failed (attempt %d/%d): %s", attempt+1, self.config.max_retries, e)
                 last_error = e
                 if attempt == self.config.max_retries - 1:
-                    # Try fallback model on final retry
                     if len(models_to_try) > 1:
                         model = self.config.fallback_model
                         try:
@@ -52,7 +55,6 @@ class RouterClient:
                             last_error = e2
                 await asyncio.sleep(2 ** attempt)
 
-        # Circuit breaker: track consecutive failures
         self._failure_count += 1
         if self._failure_count >= 3:
             raise LLMUnavailableError("Circuit breaker open: too many failures")
