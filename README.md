@@ -1,44 +1,93 @@
 # MemoryMesh
 
-Long-term memory MCP server for AI agents. Local-first, hybrid search (ChromaDB + FTS5),
-cross-session recall via 15 MCP tools.
+**Local-first persistent memory MCP server for AI agents.**
+Hybrid search (vector + FTS5) in a single SQLite database, cross-session recall via MCP tools.
 
 ## Quick Start
 
 ```bash
-# Install
-pip install -e .
+# Clone & enter
+git clone https://github.com/staavanothanh/MemoryMesh.git
+cd MemoryMesh
 
-# Run (stdio transport, default)
+# --- Linux / macOS ---
+chmod +x setup.sh && ./setup.sh
+
+# --- Windows ---
+.\setup.ps1
+
+# Then activate the virtual environment and run:
 python -m memorymesh
+```
 
-# Run with env overrides
-ROUTER_URL=http://localhost:11434/v1 \
-  DEFAULT_MODEL=deepseek-v4-flash \
-  python -m memorymesh
+Or step by step:
 
-# Run tests
-python -m pytest tests/ -v
+```bash
+pip install -e ".[test]"       # install with test deps
+cp .env.example .env           # configure your LLM endpoint
+python -m memorymesh           # start MCP server (stdio)
 ```
 
 ## Architecture
 
 ```
-User -> OpenCode CLI -> LLM (deepseek-v4-flash via 9Router)
-                         |
-                         +-> recall(query)  -> MemoryMesh MCP Server
-                         |                      +-> ChromaDB (vector)
-                         |                      +-> FTS5 (keyword)
-                         |                      +-> RRF fusion
-                         |
-                         +-> save_context_pair -> atomic fact extraction
+User -> Any MCP Client -> LLM (via your router)
+                           |
+                           +-> recall(query)  -> MemoryMesh MCP Server
+                           |                      +-> sqlite-vec (vector ANN)
+                           |                      +-> FTS5 (keyword)
+                           |                      +-> RRF fusion
+                           |
+                           +-> save_context_pair -> atomic fact extraction
 ```
 
-**Key design choices:**
+**Key design:**
 - Session context starts empty; LLM calls `recall` on demand (dynamic recall)
+- Single SQLite DB with sqlite-vec for vector search + FTS5 for keyword
 - Background tasks (enrichment, consolidation, fact extraction) are rate-limited
-- Memories are soft-deleted (archived), not permanently removed
 - Session-level memories auto-expire after 7 days
+
+## Setup
+
+### Prerequisites
+- Python **3.12+**
+- An OpenAI-compatible LLM endpoint (Ollama, vLLM, OpenAI, 9Router, etc.)
+
+### Environment
+
+Copy `.env.example` to `.env` and edit:
+
+```bash
+cp .env.example .env
+```
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `ROUTER_URL` | `http://127.0.0.1:20128/v1` | LLM endpoint |
+| `DEFAULT_MODEL` | `your-model` | Primary LLM model |
+| `EMBEDDING_MODEL` | `paraphrase-multilingual-MiniLM-L12-v2` | Embedding model |
+| `VEC_DB_PATH` | `./db/memory.db` | SQLite database path |
+| `DEFAULT_USER_ID` | `your_user_id` | Default user |
+| `MCP_TRANSPORT` | `stdio` | `stdio` or `sse` |
+| `MCP_PORT` | `8090` | SSE port |
+
+### Using with CLI Agents
+
+MemoryMesh is an **MCP server** — compatible with any MCP client:
+
+| Agent | Setup |
+|-------|-------|
+| **OpenCode / Claude Code** | Add to `.opencode.json` MCP config as `memorymesh` |
+| **Cursor** | Add MCP server in Cursor settings |
+| **Continue.dev** | Add MCP server in `~/.continue/config.json` |
+| **Cline / Roo Code** | Add MCP server in VS Code extension settings |
+| **Any MCP client** | `python -m memorymesh` (stdio) or `http://localhost:8090` (SSE) |
+
+### Docker
+
+```bash
+docker compose -f docker/docker-compose.yml up -d
+```
 
 ## 15 MCP Tools
 
@@ -60,25 +109,10 @@ User -> OpenCode CLI -> LLM (deepseek-v4-flash via 9Router)
 | `save_workspace_context` | Snapshot workspace state |
 | `resume_session` | Restore context from a past session |
 
-## Environment
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `ROUTER_URL` | `http://127.0.0.1:20128/v1` | 9Router endpoint |
-| `DEFAULT_MODEL` | `deepseek-v4-flash` | Primary LLM model |
-| `FALLBACK_MODEL` | `deepseek-v4-pro` | Fallback LLM model |
-| `CHROMA_DB_PATH` | `./db/chroma` | Vector store path |
-| `FTS_DB_PATH` | `./db/memory_fts.db` | Full-text search path |
-| `SESSION_DB_PATH` | `./db/sessions.db` | Session store path |
-| `DEFAULT_USER_ID` | `Shinn` | Default user identifier |
-| `SESSION_MEMORY_TTL_DAYS` | `7` | Session memory expiry |
-| `MCP_TRANSPORT` | `stdio` | `stdio` or `sse` |
-| `MCP_PORT` | `8090` | SSE transport port |
-
 ## Development
 
 ```bash
-make install      # pip install -e .
+make install      # pip install -e ".[test]"
 make test         # run all tests
 make run          # start server
 make clean        # remove temp files
@@ -88,24 +122,22 @@ make clean        # remove temp files
 
 ```
 src/memorymesh/
-  config.py          App configuration (dataclasses + env)
-  router.py          9Router client (retry + circuit breaker)
-  embedder.py        SentenceTransformer (async thread pool)
+  config.py         App configuration (dataclasses + env)
+  router.py         LLM router client (retry + circuit breaker)
+  embedder.py       SentenceTransformer (async thread pool)
   memory/
-    manager.py       Core CRUD + scoring + background tasks
-    chroma_impl.py   ChromaDB vector backend
-    fts_backend.py   SQLite FTS5 backend
-    hybrid_backend.py Hybrid search orchestrator
-    consolidation.py Clustering + merge + TTL expiry
-    fact_extractor.py Atomic fact extraction (single + batch)
-    instinct.py      Pattern learning engine
-    session_store.py Session lifecycle
+    manager.py      Core CRUD + scoring + background tasks
+    sqlite_vec_backend.py  Single-DB: vector + FTS5 + metadata
+    consolidation.py       Clustering + merge + TTL expiry
+    fact_extractor.py      Atomic fact extraction
+    instinct.py            Pattern learning engine
+    session_store.py       Session lifecycle
   mcp_server/
     server.py        MCP server lifecycle
     handlers.py      Tool handler implementations
     tools.py         Tool schema definitions
 tests/
-  120+ tests (pytest, asyncio_mode=auto)
+  130+ tests (pytest, asyncio_mode=auto)
 ```
 
 ## License

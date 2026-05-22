@@ -48,9 +48,20 @@ class SqliteVecBackend:
     async def initialize(self):
         self._db = await aiosqlite.connect(self.db_path)
         self._db.row_factory = aiosqlite.Row
-        conn = self._db._conn
+        await self._db.execute("SELECT 1")
+        try:
+            conn = self._db._conn
+        except AttributeError:
+            raise RuntimeError(
+                "aiosqlite internal API 'Connection._conn' not found. "
+                "Pin dependency: pip install 'aiosqlite>=0.20,<0.23'"
+            )
         await self._db._execute(
-            lambda: load_vec_extension(conn)
+            lambda: (
+                conn.enable_load_extension(True),
+                sqlite_vec.load(conn),
+                conn.enable_load_extension(False),
+            )
         )
         await self._db.execute("PRAGMA journal_mode=WAL")
         await self._db.execute("PRAGMA busy_timeout=5000")

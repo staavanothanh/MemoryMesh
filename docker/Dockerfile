@@ -14,10 +14,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=builder /app/dist/*.whl /tmp/
 RUN pip install --no-cache-dir /tmp/*.whl && rm -rf /tmp/*.whl
 
-RUN mkdir -p /app/db/chroma /app/db
-ENV CHROMA_DB_PATH=/app/db/chroma \
-    FTS_DB_PATH=/app/db/memory_fts.db \
+RUN mkdir -p /app/db
+ENV VEC_DB_PATH=/app/db/memory.db \
     SESSION_DB_PATH=/app/db/sessions.db \
+    INSTINCT_DB_PATH=/app/db/instincts.db \
     LOG_LEVEL=INFO
 
 VOLUME ["/app/db"]

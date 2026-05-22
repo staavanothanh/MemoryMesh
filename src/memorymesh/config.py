@@ -27,23 +27,6 @@ class SqliteVecConfig:
 
 # Deprecated — kept for migration script only
 @dataclass
-class ChromaConfig:
-    db_path: str = "./db/chroma"
-
-    def validate(self):
-        os.makedirs(self.db_path, exist_ok=True)
-
-
-@dataclass
-class FTSConfig:
-    db_path: str = "./db/memory_fts.db"
-
-    def validate(self):
-        import os
-        os.makedirs(os.path.dirname(self.db_path) or ".", exist_ok=True)
-
-
-@dataclass
 class SessionConfig:
     db_path: str = "./db/sessions.db"
     auto_create_session: bool = True
@@ -90,9 +73,6 @@ class AppConfig:
     session: SessionConfig
     consolidation: ConsolidationConfig
     instinct: InstinctConfig = field(default_factory=InstinctConfig)
-    # Deprecated — kept for migration script
-    chroma: ChromaConfig = field(default_factory=ChromaConfig)
-    fts: FTSConfig = field(default_factory=FTSConfig)
     level_weight_session: float = 2.0
     level_weight_user: float = 1.5
     level_weight_knowledge: float = 1.0
@@ -143,12 +123,6 @@ class AppConfig:
                 batch_size=int(os.getenv("CONSOLIDATION_BATCH", "50")),
                 enabled=os.getenv("CONSOLIDATION_ENABLED", "true").lower() == "true",
                 session_memory_ttl_days=int(os.getenv("SESSION_MEMORY_TTL_DAYS", "7")),
-            ),
-            chroma=ChromaConfig(
-                db_path=os.getenv("CHROMA_DB_PATH", "./db/chroma"),
-            ),
-            fts=FTSConfig(
-                db_path=os.getenv("FTS_DB_PATH", "./db/memory_fts.db"),
             ),
             level_weight_session=float(os.getenv("LEVEL_WEIGHT_SESSION", "2.0")),
             level_weight_user=float(os.getenv("LEVEL_WEIGHT_USER", "1.5")),

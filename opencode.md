@@ -1,31 +1,33 @@
 # MemoryMesh — Long-term Memory MCP Server
 
 ## Project Identity
-Persistent memory system for AI agents. Local-first, hybrid search (ChromaDB + FTS5),
+Persistent memory system for AI agents. Local-first, hybrid search (sqlite-vec + FTS5),
 automatic cross-session recall via MCP protocol.
 
-Tech stack: Python 3.12+, ChromaDB, SQLite FTS5, asyncio, sentence-transformers, MCP SDK (v1).
+Tech stack: Python 3.12+, sqlite-vec, SQLite FTS5, asyncio, sentence-transformers, MCP SDK (v1).
 
 ## Architecture
 
 ```
-Session Start ──> L1 Bootstrapper ──> Inject state summary (~1k tokens) into context
+Session Start ──> Bootstrap ──> Inject state summary into context
                      │
-User Request ───────> LLM ──────────────> If dangling reference detected
+User Request ───────> LLM ──────────────> If reference to past detected
                                               │
-                                              └──> recall(query) ──> L2 Dynamic Recall
-                                                                       (token-budgeted, max 3k)
+                                              └──> recall(query) ──> sqlite-vec + FTS5
+                                                                       (hybrid with fallback)
                                                                        │
-                                                                  ChromaDB + FTS5 (hybrid)
+                                                                  Tier 1: vector ANN
+                                                                  Tier 2: FTS keyword
+                                                                  Tier 3: chronological
 
-Session End ─────────> L1 Compaction ───> Create bootstrap snapshot (tag="bootstrap")
+Session End ─────────> Compaction ──> Create bootstrap snapshot
 ```
 
-- **Main chat** goes directly from OpenCode to 9Router, NOT through MemoryMesh
-- **MemoryMesh** is purely a background MCP server: it enriches, consolidates, and retrieves memories
-- **L1 Bootstrap**: `end_session` creates a compacted summary; `new_session` auto-injects it as context
-- **L2 Dynamic Recall**: triggered by LLM's `recall` call, guarded by token budget (default 1000 tokens)
-- **Gated writes**: ChromaDB + FTS5 kept in sync with rollback + background reconciliation
+- **Chat** goes directly from client to LLM, NOT through MemoryMesh
+- **MemoryMesh** is purely a background MCP server: enriches, consolidates, retrieves
+- **Bootstrap**: `end_session` creates a summary; `new_session` auto-injects it
+- **Dynamic Recall**: triggered by LLM's `recall` call, guarded by token budget
+- **Single-DB**: sqlite-vec for vector, FTS5 for keyword — all in one SQLite file
 
 ## 15 MCP Tools
 
@@ -37,7 +39,7 @@ Session End ─────────> L1 Compaction ───> Create bootstr
 | `archive_memory` | Move a memory into archive |
 | `unarchive_memory` | Restore an archived memory |
 | `list_memories` | List non-archived memories (paginated) |
-| `ping` | Health check — returns memory_count + fts_connected |
+| `ping` | Health check |
 | `save_system_prompt` | Save system prompt to current session |
 | `save_context_pair` | Save user+assistant exchange, trigger fact extraction |
 | `list_sessions` | List past sessions |
@@ -49,42 +51,41 @@ Session End ─────────> L1 Compaction ───> Create bootstr
 
 ## Key Conventions
 
-1. **Async first**: All I/O uses `asyncio`. Never block the event loop. ChromaDB sync calls wrapped in `asyncio.to_thread`.
+1. **Async first**: All I/O uses `asyncio`. Never block the event loop.
 2. **Type hints**: All functions MUST have complete type annotations.
 3. **Error handling**: Use `MemoryMeshError` hierarchy from `errors.py`. No bare `except Exception`.
-4. **Background tasks**: Use `manager._create_tracked_task()` instead of raw `asyncio.create_task()`. Tasks are tracked in a set and cancelled on shutdown.
-5. **Rate-limiting**: All expensive background ops (consolidation 60s, fact resolution 120s, expiry 60s, FTS reconcile 300s) are rate-limited per user.
-6. **Workspace isolation**: Memories tagged with `workspace_path`; hierarchical visibility (siblings visible, parent→children visible, child→parent invisible).
-7. **Soft delete**: `forget` and `archive` mark `archived=True`; archived memories excluded from recall/list. Use `unarchive_memory` to restore.
+4. **Background tasks**: Use `manager._create_tracked_task()` instead of raw `asyncio.create_task()`.
+5. **Rate-limiting**: All expensive background ops (consolidation 60s, fact resolution 120s, expiry 60s) are rate-limited per user.
+6. **Workspace isolation**: Memories tagged with `workspace_path`; hierarchical visibility.
+7. **Soft delete**: `forget` and `archive` mark `deleted=True`; use `unarchive_memory` to restore.
 8. **Memory expiry**: Session-level memories older than `session_memory_ttl_days` (default 7) are auto-expired.
-9. **List/recall filters**: Consolidated, expired, and archived memories are filtered out automatically.
-10. **Fact batching**: Up to 3 conversation pairs are batched into a single LLM call for atomic fact extraction.
-11. **Gated write**: HybridBackend writes ChromaDB first, FTS5 second, rollback chroma if FTS fails. Prevents data drift.
-12. **FTS reconciliation**: Background task (300s interval) re-indexes orphaned chroma entries and cleans stale FTS entries.
-13. **L1 bootstrap**: `end_session` creates a compacted workspace snapshot (~1k tokens, tag `bootstrap`). `new_session` auto-injects it into context.
-14. **Token budget**: Recall enforces configurable `token_budget` (default 1000). Optional `max_tokens` param overrides.
-15. **Ingest compaction**: Atomic facts truncated to 150 tokens max. Each fact includes `relation` metadata.
-16. **ANSI logging**: Background ops use structured colored logs (`[MemoryMesh]` prefix).
+9. **Fact batching**: Up to 3 conversation pairs are batched into a single LLM call.
+10. **Token budget**: Recall enforces configurable `token_budget` (default 1000).
+11. **Session tagging**: Memories tagged with `session:<id>` for cleanup on end_session.
+12. **Layer 2 auto-save**: All tool calls are auto-saved as session memories.
+13. **Layer 3 depth compaction**: Auto-compact when context log reaches 80% of threshold.
 
 ## Data Storage
 
-All persistent data lives under `.opencode/data/` (per-workspace sandbox):
 ```
-.opencode/data/
-  chroma/            Vector embeddings (ChromaDB PersistentClient)
-  memory_fts.db      Full-text search (SQLite FTS5)
-  sessions.db        Session store (context_log, snapshots)
-  instincts.db       Pattern learning store
+./db/
+  memory.db         Vector embeddings (sqlite-vec) + FTS5 + metadata (single DB)
+  sessions.db       Session store (context_log, snapshots)
+  instincts.db      Pattern learning store
 ```
 
-Legacy data under `./db/` is still supported via env vars.
+## Compatibility
+
+**OS**: Windows, macOS, Linux.
+**Python**: 3.12+.
+**Clients**: Any MCP-compatible agent (OpenCode, Claude Code, Cursor, Continue.dev, Cline, etc.).
 
 ## Directory Structure
 
 ```
 src/memorymesh/
   config.py          AppConfig, dataclasses, from_env()
-  router.py          9Router HTTP client (retry + fallback + circuit breaker)
+  router.py          LLM HTTP client (retry + fallback + circuit breaker)
   embedder.py        SentenceTransformer (async thread pool, singleton)
   scanner.py         Codebase directory scanner
   hooks.py           Pub-sub event hook registry
@@ -93,32 +94,32 @@ src/memorymesh/
 
   memory/
     manager.py       Core CRUD + scoring + enrichment + background tasks
-    chroma_impl.py   ChromaDB backend (async + asyncio.to_thread)
-    fts_backend.py   SQLite FTS5 backend
-    hybrid_backend.py Hybrid search (ChromaDB + FTS5 + RRF fusion)
-    hybrid_utils.py  RRF fusion algorithm
-    consolidation.py Similarity clustering + LLM merge + TTL expiry
-    fact_extractor.py Atomic fact extraction (single + batch)
-    instinct.py      Pattern learning engine
-    instinct_store.py Instinct SQLite storage
-    session_store.py Session lifecycle + context log + snapshots
+    sqlite_vec_backend.py  Single-DB: vector + FTS5 + metadata
+    consolidation.py       Similarity clustering + LLM merge + TTL expiry
+    fact_extractor.py      Atomic fact extraction (single + batch)
+    instinct.py            Pattern learning engine
+    instinct_store.py      Instinct SQLite storage
+    session_store.py       Session lifecycle + context log + snapshots
 
   mcp_server/
     server.py        MCP server lifecycle + tool dispatch
     handlers.py      All 15 tool handler implementations
     tools.py         MCP Tool schema definitions
 
-Makefile              Build targets (install, test, run, clean)
-README.md             Project docs (quick start, architecture, 15 tools)
-opencode.md           Project instruction file (auto-injected by OpenCode)
+Makefile              Build targets (cross-platform, python-based clean)
+setup.sh              macOS/Linux one-command setup
+setup.ps1             Windows one-command setup
+README.md             Project docs
+opencode.md           Project instruction file
 .github/workflows/    CI/CD workflow (GitHub Actions)
-tests/                148 tests (pytest, asyncio_mode=auto)
+tests/                130+ tests (pytest, asyncio_mode=auto)
 ```
 
 ## Coding Standards
 
-- **Language**: Code/comments in English. Prompt descriptions in Vietnamese (end-user facing).
+- **Language**: Code/comments in English. Use English for all identifiers.
 - **Imports**: stdlib -> third-party -> local. Absolute imports preferred.
 - **Naming**: `snake_case` for functions/vars, `PascalCase` for classes, `UPPER_CASE` for constants.
-- **Testing**: pytest with `asyncio_mode=auto`. Use tmp dirs for DB tests. 148+ tests required.
+- **Testing**: pytest with `asyncio_mode=auto`. Use tmp dirs for DB tests. 130+ tests required.
+- **Cross-platform**: Never use shell-specific commands in Python code. Use `pathlib` for paths.
 - **Commits**: Conventional commits (`feat`/`fix`/`refactor`/`perf`/`test`/`docs`).
