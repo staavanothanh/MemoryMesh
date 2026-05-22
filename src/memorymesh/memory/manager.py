@@ -184,7 +184,7 @@ class MemoryManager:
         """Call LLM to get tags, importance, summary and update memory metadata."""
         try:
             prompt = EXTRACT_METADATA_PROMPT.format(content=text)
-            response = await self.router.call_llm(prompt)
+            response = await self.router.call_llm_background(prompt, json_mode=True)
             import json
             meta = json.loads(response)
             update = {}

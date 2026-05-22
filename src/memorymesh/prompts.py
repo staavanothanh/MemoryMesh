@@ -1,9 +1,14 @@
-EXTRACT_METADATA_PROMPT = """You are a memory metadata extractor. Analyze the following memory content and return a JSON object with these fields:
+EXTRACT_METADATA_PROMPT = """You are a memory metadata extractor. Analyze the following memory content and return a JSON object matching this exact schema:
+{{
+  "tags": ["tag1", "tag2"],
+  "importance": 3,
+  "summary": "short summary here"
+}}
 - tags: list of 1-3 relevant tags (lowercase, hyphenated if multi-word)
 - importance: integer from 1 (trivial) to 5 (critical)
 - summary: a very short summary (max 10 words)
 
-Return ONLY valid JSON, nothing else.
+Return ONLY valid JSON. Do not include any conversational filler, intro, or markdown code blocks.
 
 Memory content:
 {content}
@@ -19,7 +24,17 @@ Summary:"""
 
 BOOTSTRAP_SNAPSHOT_PROMPT = """You are a high-level technical product manager and architect. Synthesize the current session chat logs.
 
-Return a strict JSON object with these fields (in this order):
+Return ONLY a valid JSON object matching this exact schema:
+{{
+  "narrative_summary": "string",
+  "discussion_topic": "string",
+  "work_done": "string",
+  "architectural_decisions": "string",
+  "last_milestone": "string",
+  "next_steps": "string"
+}}
+
+Field descriptions:
 - narrative_summary: "A single dense paragraph summarizing what was discussed, why it was debated, and the current focus (max 100 words)"
 - discussion_topic: "The exact conceptual component or bug being addressed (max 40 words)"
 - work_done: "Specific files changed, tests run, commands executed, and concrete achievements this session (max 50 words)"
@@ -31,7 +46,7 @@ Rules:
 - narrative_summary is MANDATORY — this is the primary recovery text for cold-start
 - Only include information EXPLICITLY present in the log
 - If a field has no information, set it to an empty string
-- Return ONLY valid JSON, no extra text
+- Do not include any conversational filler, intro, or markdown code blocks
 
 Conversation Log:
 {log}
@@ -76,18 +91,17 @@ Rules:
 - Skip: facts already present in the input (no duplicates)
 - Use the original language of the information (Vietnamese or English)
 
-Return a JSON object with a "facts" field containing an array of fact objects:
+Return ONLY a valid JSON object matching this exact schema:
 {{
   "facts": [
-    {{"fact": "short assertion here", "confidence": "high|medium|low", "tags": ["tag1", "tag2"], "relation": "HAS_PREFERENCE"}},
-    {{"fact": "another assertion", "confidence": "high", "tags": ["tag1"], "relation": "ARCHITECTURAL_DECISION"}}
+    {{"fact": "short assertion here", "confidence": "high", "tags": ["tag1"], "relation": "HAS_PREFERENCE"}}
   ]
 }}
 
 - confidence: "high" for explicit statements, "medium" for strong implications, "low" for guesses
 - tags: 1-3 relevant category tags (lowercase)
 - relation: one of HAS_PREFERENCE, ARCHITECTURAL_DECISION, RESOLVED_BUG, TECHNICAL_DETAIL, USER_INFO, PROJECT_GOAL, CODE_PATTERN, DEPENDENCY, DESIGN_CHOICE, or empty string if none applies
-- Return ONLY valid JSON, no extra text.
+- Do not include any conversational filler, intro, or markdown code blocks
 
 Conversation:
 {conversation}
@@ -104,18 +118,17 @@ Rules:
 - Skip: duplicate facts across conversations (keep only the first occurrence)
 - Use the original language of the information (Vietnamese or English)
 
-Return a JSON object with a "facts" field containing an array of fact objects:
+Return ONLY a valid JSON object matching this exact schema:
 {{
   "facts": [
-    {{"fact": "short assertion here", "confidence": "high|medium|low", "tags": ["tag1", "tag2"], "relation": "HAS_PREFERENCE"}},
-    {{"fact": "another assertion", "confidence": "high", "tags": ["tag1"], "relation": "ARCHITECTURAL_DECISION"}}
+    {{"fact": "short assertion here", "confidence": "high", "tags": ["tag1"], "relation": "HAS_PREFERENCE"}}
   ]
 }}
 
 - confidence: "high" for explicit statements, "medium" for strong implications, "low" for guesses
 - tags: 1-3 relevant category tags (lowercase)
 - relation: one of HAS_PREFERENCE, ARCHITECTURAL_DECISION, RESOLVED_BUG, TECHNICAL_DETAIL, USER_INFO, PROJECT_GOAL, CODE_PATTERN, DEPENDENCY, DESIGN_CHOICE, or empty string if none applies
-- Return ONLY valid JSON, no extra text.
+- Do not include any conversational filler, intro, or markdown code blocks
 
 Conversations:
 {conversations}

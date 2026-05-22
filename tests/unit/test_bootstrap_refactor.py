@@ -20,7 +20,8 @@ async def tool_handlers(memory_manager, app_config):
 class TestCreateBootstrapSnapshot:
     @pytest.mark.asyncio
     async def test_format_includes_narrative_summary(self, tool_handlers):
-        with patch.object(tool_handlers.manager.router, "call_llm",
+        tool_handlers.manager.router.config.background_model_pool = ["test-model"]
+        with patch.object(tool_handlers.manager.router, "_call",
                           new=AsyncMock(return_value=json.dumps({
                               "narrative_summary": "We fixed the search fallback system.",
                               "discussion_topic": "3-tier fallback optimization",
@@ -54,23 +55,34 @@ class TestCreateBootstrapSnapshot:
 
     @pytest.mark.asyncio
     async def test_short_session_creates_fallback(self, tool_handlers):
-        with patch.object(tool_handlers.session_store, "get_context_log",
-                          new=AsyncMock(return_value=[
-                              {"role": "user", "content": "hi"},
-                          ])):
-            with patch.object(tool_handlers.manager, "add_memory",
-                              new=AsyncMock(return_value="mem_123")):
-                await tool_handlers._create_bootstrap_snapshot(
-                    "test_session_id", "test_user",
-                )
-                add_call = tool_handlers.manager.add_memory.call_args
-                assert add_call is not None
-                kwargs = add_call[1]
-                assert "bootstrap" in kwargs.get("tags", [])
+        tool_handlers.manager.router.config.background_model_pool = ["test-model"]
+        with patch.object(tool_handlers.manager.router, "_call",
+                          new=AsyncMock(return_value=json.dumps({
+                              "narrative_summary": "Session ended",
+                              "discussion_topic": "",
+                              "work_done": "",
+                              "architectural_decisions": "",
+                              "last_milestone": "Session ended",
+                              "next_steps": "",
+                          }))):
+            with patch.object(tool_handlers.session_store, "get_context_log",
+                              new=AsyncMock(return_value=[
+                                  {"role": "user", "content": "hi"},
+                              ])):
+                with patch.object(tool_handlers.manager, "add_memory",
+                                  new=AsyncMock(return_value="mem_123")):
+                    await tool_handlers._create_bootstrap_snapshot(
+                        "test_session_id", "test_user",
+                    )
+                    add_call = tool_handlers.manager.add_memory.call_args
+                    assert add_call is not None
+                    kwargs = add_call[1]
+                    assert "bootstrap" in kwargs.get("tags", [])
 
     @pytest.mark.asyncio
     async def test_llm_failure_uses_fallback_dict(self, tool_handlers):
-        with patch.object(tool_handlers.manager.router, "call_llm",
+        tool_handlers.manager.router.config.background_model_pool = ["test-model"]
+        with patch.object(tool_handlers.manager.router, "_call",
                           new=AsyncMock(side_effect=Exception("LLM down"))):
             with patch.object(tool_handlers.session_store, "get_context_log",
                               new=AsyncMock(return_value=[
@@ -178,6 +190,9 @@ class TestBootstrapPrompt:
     def test_prompt_includes_narrative_summary(self):
         assert "narrative_summary" in BOOTSTRAP_SNAPSHOT_PROMPT
 
+    def test_prompt_includes_work_done(self):
+        assert "work_done" in BOOTSTRAP_SNAPSHOT_PROMPT
+
     def test_prompt_excludes_project_identity(self):
         assert "project_identity" not in BOOTSTRAP_SNAPSHOT_PROMPT
 
@@ -189,3 +204,6 @@ class TestBootstrapPrompt:
 
     def test_prompt_requires_json_output(self):
         assert "valid JSON" in BOOTSTRAP_SNAPSHOT_PROMPT
+
+    def test_prompt_forbids_markdown_and_filler(self):
+        assert "markdown" in BOOTSTRAP_SNAPSHOT_PROMPT

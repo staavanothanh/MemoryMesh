@@ -261,7 +261,7 @@ class ToolHandlers:
 
             prompt = BOOTSTRAP_SNAPSHOT_PROMPT.format(log=log_text)
             try:
-                response = await self.manager.router.call_llm_background(prompt)
+                response = await self.manager.router.call_llm_background(prompt, json_mode=True)
                 data = json.loads(response.strip())
             except Exception as e:
                 logger.warning("LLM bootstrap snapshot failed, using fallback: %s", e)

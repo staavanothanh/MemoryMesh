@@ -29,15 +29,21 @@ class RouterClient:
         async with self._semaphore:
             return await self._call_llm_impl(prompt, model)
 
-    async def call_llm_background(self, prompt: str) -> str:
+    async def call_llm_background(self, prompt: str, *, json_mode: bool = False) -> str:
         """Call LLM using free model pool cascade for background tasks.
 
         Tries each model in background_model_pool in sequence.
+        All calls use temperature=0.0 for deterministic output.
+        If json_mode=True, also sends response_format={"type": "json_object"}.
         If all free models fail, falls back to normal call_llm (paid).
         """
         pool = self.config.background_model_pool
         if not pool:
             return await self.call_llm(prompt)
+
+        kwargs = {"temperature": 0.0}
+        if json_mode:
+            kwargs["response_format"] = {"type": "json_object"}
 
         last_error = None
         for model in pool:
@@ -46,7 +52,7 @@ class RouterClient:
                 continue
             try:
                 async with self._semaphore:
-                    return await self._call(model, prompt)
+                    return await self._call(model, prompt, **kwargs)
             except Exception as e:
                 last_error = e
                 logger.warning("Background model %s failed: %s", model, e)
@@ -78,14 +84,19 @@ class RouterClient:
             raise LLMUnavailableError("Circuit breaker open: too many failures")
         raise last_error or RouterError(primary, self.config.max_retries, "Unknown error")
 
-    async def _call(self, model: str, prompt: str) -> str:
+    async def _call(self, model: str, prompt: str, temperature: float = None, response_format: dict = None) -> str:
+        body = {
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+        }
+        if temperature is not None:
+            body["temperature"] = temperature
+        if response_format is not None:
+            body["response_format"] = response_format
         try:
             response = await self._client.post(
                 f"{self.config.url}/chat/completions",
-                json={
-                    "model": model,
-                    "messages": [{"role": "user", "content": prompt}],
-                },
+                json=body,
             )
             if response.status_code == 200:
                 self._failure_count = 0
