@@ -506,6 +506,37 @@ class MemoryManager:
             return await self.backend.delete_by_tag(tag)
         return 0
 
+    async def preserve_important_memories(self, session_id: str) -> int:
+        """Copy important session memories to knowledge level before cascade delete."""
+        tag = f"session:{session_id[:8]}"
+        if not hasattr(self.backend, "list_by_tag"):
+            return 0
+        memories = await self.backend.list_by_tag(tag)
+        KEYWORDS = {
+            "plan", "kế hoạch", "architecture", "design decision",
+            "quyết định", "thiết kế", "next step", "tiếp theo",
+            "refactor", "implement", "fix", "thay đổi",
+            "milestone", "goal", "mục tiêu",
+        }
+        preserved = 0
+        for mem in memories:
+            meta = mem.get("metadata", {})
+            imp = mem.get("importance", 3)
+            content = mem.get("content", "")
+            if imp >= 4 or any(kw in content.lower() for kw in KEYWORDS):
+                await self.add_memory(
+                    text=content,
+                    tags=["preserved", "session_summary", tag],
+                    importance=min(imp + 1, 5),
+                    level="knowledge",
+                    user_id=mem["user_id"],
+                    workspace_path=meta.get("workspace_path"),
+                )
+                preserved += 1
+        if preserved:
+            logger.info("Preserved %d important memories from session %s", preserved, session_id[:8])
+        return preserved
+
     async def archive_memory(self, memory_id: str) -> bool:
         """Archive a memory (hide from recall, still in storage)."""
         async with self._write_lock:

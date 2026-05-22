@@ -430,6 +430,25 @@ class SqliteVecBackend:
     # List / enumerate
     # ------------------------------------------------------------------
 
+    async def list_by_tag(self, tag: str) -> List[Dict[str, Any]]:
+        cursor = await self._db.execute(
+            """SELECT id, user_id, content, metadata_json, level, importance
+               FROM memories WHERE metadata_json LIKE ? AND deleted = 0""",
+            (f"%{tag}%",),
+        )
+        rows = await cursor.fetchall()
+        return [
+            {
+                "id": r["id"],
+                "user_id": r["user_id"],
+                "content": r["content"],
+                "metadata": json.loads(r["metadata_json"]),
+                "level": r["level"],
+                "importance": r["importance"],
+            }
+            for r in rows
+        ]
+
     async def delete_by_tag(self, tag: str) -> int:
         cursor = await self._db.execute(
             "SELECT id FROM memories WHERE metadata_json LIKE ? AND deleted = 0",

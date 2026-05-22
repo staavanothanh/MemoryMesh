@@ -29,6 +29,32 @@ class RouterClient:
         async with self._semaphore:
             return await self._call_llm_impl(prompt, model)
 
+    async def call_llm_background(self, prompt: str) -> str:
+        """Call LLM using free model pool cascade for background tasks.
+
+        Tries each model in background_model_pool in sequence.
+        If all free models fail, falls back to normal call_llm (paid).
+        """
+        pool = self.config.background_model_pool
+        if not pool:
+            return await self.call_llm(prompt)
+
+        last_error = None
+        for model in pool:
+            model = model.strip()
+            if not model:
+                continue
+            try:
+                async with self._semaphore:
+                    return await self._call(model, prompt)
+            except Exception as e:
+                last_error = e
+                logger.warning("Background model %s failed: %s", model, e)
+                continue
+
+        logger.warning("All background models failed, falling back to call_llm: %s", last_error)
+        return await self.call_llm(prompt)
+
     async def _call_llm_impl(self, prompt: str, model: Optional[str] = None) -> str:
         if self._failure_count >= 3:
             raise LLMUnavailableError("Circuit breaker open: too many failures")

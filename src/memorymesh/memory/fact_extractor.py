@@ -27,7 +27,7 @@ class FactExtractor:
             return []
         prompt = ATOMIC_FACT_EXTRACT_PROMPT.format(conversation=conversation)
         try:
-            response = await self.router.call_llm(prompt)
+            response = await self.router.call_llm_background(prompt)
             data = json.loads(response)
             raw_facts = data.get("facts", [])
             if not isinstance(raw_facts, list):
@@ -46,7 +46,7 @@ class FactExtractor:
         combined = "\n---\n".join(f"Conversation {i+1}:\n{c}" for i, c in enumerate(active))
         prompt = ATOMIC_FACT_BATCH_PROMPT.format(conversations=combined)
         try:
-            response = await self.router.call_llm(prompt)
+            response = await self.router.call_llm_background(prompt)
             data = json.loads(response)
             raw_facts = data.get("facts", [])
             if not isinstance(raw_facts, list):

@@ -9,13 +9,14 @@ from memorymesh.config import RouterConfig
 def fact_extractor(app_config):
     router = AsyncMock()
     router.call_llm = AsyncMock()
+    router.call_llm_background = AsyncMock()
     return FactExtractor(app_config, router)
 
 
 class TestExtractFacts:
     @pytest.mark.asyncio
     async def test_extract_facts_success(self, fact_extractor):
-        fact_extractor.router.call_llm.return_value = '{"facts": [{"fact": "User likes Python", "confidence": "high", "tags": ["language"]}]}'
+        fact_extractor.router.call_llm_background.return_value = '{"facts": [{"fact": "User likes Python", "confidence": "high", "tags": ["language"]}]}'
         facts = await fact_extractor.extract_facts("I like Python")
         assert len(facts) == 1
         assert facts[0]["fact"] == "User likes Python"
@@ -33,19 +34,19 @@ class TestExtractFacts:
 
     @pytest.mark.asyncio
     async def test_extract_facts_invalid_json(self, fact_extractor):
-        fact_extractor.router.call_llm.return_value = "not json"
+        fact_extractor.router.call_llm_background.return_value = "not json"
         facts = await fact_extractor.extract_facts("test")
         assert facts == []
 
     @pytest.mark.asyncio
     async def test_extract_facts_llm_error(self, fact_extractor):
-        fact_extractor.router.call_llm.side_effect = RuntimeError("LLM down")
+        fact_extractor.router.call_llm_background.side_effect = RuntimeError("LLM down")
         facts = await fact_extractor.extract_facts("test")
         assert facts == []
 
     @pytest.mark.asyncio
     async def test_extract_batch_success(self, fact_extractor):
-        fact_extractor.router.call_llm.return_value = (
+        fact_extractor.router.call_llm_background.return_value = (
             '{"facts": [{"fact": "Fact A", "confidence": "high", "tags": ["a"]}, {"fact": "Fact B", "confidence": "medium", "tags": ["b"]}]}'
         )
         facts = await fact_extractor.extract_facts_batch(["Conversation 1", "Conversation 2"])

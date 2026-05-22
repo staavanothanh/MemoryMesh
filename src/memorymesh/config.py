@@ -8,6 +8,7 @@ class RouterConfig:
     url: str = "http://127.0.0.1:20128/v1"
     default_model: str = "deepseek-v4-flash"
     fallback_model: str = "deepseek-v4-pro"
+    background_model_pool: list = None
     timeout_s: int = 30
     max_retries: int = 3
 
@@ -95,6 +96,7 @@ class AppConfig:
                 url=os.getenv("ROUTER_URL", "http://127.0.0.1:20128/v1"),
                 default_model=os.getenv("DEFAULT_MODEL", "deepseek-v4-flash"),
                 fallback_model=os.getenv("FALLBACK_MODEL", "deepseek-v4-pro"),
+                background_model_pool=os.getenv("BACKGROUND_MODEL_POOL", "").split(",") if os.getenv("BACKGROUND_MODEL_POOL") else None,
                 timeout_s=int(os.getenv("ROUTER_TIMEOUT", "30")),
                 max_retries=int(os.getenv("ROUTER_RETRIES", "3")),
             ),

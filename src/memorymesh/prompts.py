@@ -22,8 +22,9 @@ BOOTSTRAP_SNAPSHOT_PROMPT = """You are a high-level technical product manager an
 Return a strict JSON object with these fields (in this order):
 - narrative_summary: "A single dense paragraph summarizing what was discussed, why it was debated, and the current focus (max 100 words)"
 - discussion_topic: "The exact conceptual component or bug being addressed (max 40 words)"
+- work_done: "Specific files changed, tests run, commands executed, and concrete achievements this session (max 50 words)"
 - architectural_decisions: "Core tech patterns implemented, files changed, or libraries swapped (max 50 words)"
-- last_milestone: "The very last functional state achieved before closing (max 40 words)"
+- last_milestone: "The exact functional state at session end — code compiles, tests pass, feature X implemented (max 50 words)"
 - next_steps: "Concrete itemized bullet points for the next incoming session (max 60 words)"
 
 Rules:

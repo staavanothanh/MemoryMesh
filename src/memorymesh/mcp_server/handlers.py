@@ -208,11 +208,20 @@ class ToolHandlers:
             log = await self.session_store.get_context_log(session_id, limit=self.manager.config.session.compact_threshold)
             if len(log) < 3:
                 return
-            log_text = "\n".join(f"{entry['role']}: {entry['content'][:300]}" for entry in log)
+            lines = [f"{e['role']}: {e['content']}" for e in log]
+            total = sum(len(l) for l in lines)
+            if total > 15000:
+                kept = []; acc = 0
+                for e in reversed(log):
+                    l = f"{e['role']}: {e['content']}"
+                    if acc + len(l) > 15000: break
+                    kept.append(l); acc += len(l)
+                lines = list(reversed(kept))
+            log_text = "\n".join(lines)
             prompt = SESSION_COMPACT_PROMPT.format(log=log_text)
             summary = ""
             try:
-                response = await self.manager.router.call_llm(prompt)
+                response = await self.manager.router.call_llm_background(prompt)
                 summary = response.strip().strip('"').strip("'")
             except Exception as e:
                 logger.warning("LLM compact failed, using fallback: %s", e)
@@ -239,24 +248,34 @@ class ToolHandlers:
             if len(log) < 3:
                 log_text = f"Session {session_id[:8]} ended with {len(log)} messages."
             else:
-                log_text = "\n".join(f"{entry['role']}: {entry['content'][:300]}" for entry in log)
+                lines = [f"{e['role']}: {e['content']}" for e in log]
+                total = sum(len(l) for l in lines)
+                if total > 15000:
+                    kept = []; acc = 0
+                    for e in reversed(log):
+                        l = f"{e['role']}: {e['content']}"
+                        if acc + len(l) > 15000: break
+                        kept.append(l); acc += len(l)
+                    lines = list(reversed(kept))
+                log_text = "\n".join(lines)
 
             prompt = BOOTSTRAP_SNAPSHOT_PROMPT.format(log=log_text)
             try:
-                response = await self.manager.router.call_llm(prompt)
+                response = await self.manager.router.call_llm_background(prompt)
                 data = json.loads(response.strip())
             except Exception as e:
                 logger.warning("LLM bootstrap snapshot failed, using fallback: %s", e)
                 data = {
                     "narrative_summary": f"Session {session_id[:8]} ended with {len(log)} messages.",
                     "discussion_topic": "",
+                    "work_done": "",
                     "architectural_decisions": "",
                     "last_milestone": f"Session {session_id[:8]} ended",
                     "next_steps": "",
                 }
 
-            fields = ("narrative_summary", "discussion_topic", "architectural_decisions",
-                      "last_milestone", "next_steps")
+            fields = ("narrative_summary", "discussion_topic", "work_done",
+                      "architectural_decisions", "last_milestone", "next_steps")
             for key in fields:
                 data.setdefault(key, "")
 
@@ -727,6 +746,11 @@ class ToolHandlers:
                 await self._compact_session(session_id, user_id)
             await self._create_bootstrap_snapshot(session_id, user_id)
             await self._flush_fact_buffer()
+
+            # Preserve important memories before cascade delete
+            preserved = await self.manager.preserve_important_memories(session_id)
+            if preserved:
+                _log_bg("Preserve", f"Preserved {preserved} important memories to knowledge level", emoji="💾")
 
             # Cascade delete: xóa memories thuộc session này
             deleted = await self.manager.delete_memories_by_session(session_id)
