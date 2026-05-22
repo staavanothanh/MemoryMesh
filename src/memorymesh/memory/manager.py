@@ -18,6 +18,7 @@ from .consolidation import ConsolidationEngine
 from .instinct_store import InstinctStore
 from .instinct import InstinctEngine
 from ..prompts import EXTRACT_METADATA_PROMPT
+from ..utils.json_parser import clean_and_parse_llm_json
 
 _MAGENTA = "\033[1;35m"
 _CYAN = "\033[1;36m"
@@ -181,22 +182,29 @@ class MemoryManager:
         # FTS reconciliation no longer needed — vector + FTS in single ACID transaction
 
     async def _enrich_memory(self, memory_id: str, text: str, user_id: str):
-        """Call LLM to get tags, importance, summary and update memory metadata."""
+        """Call LLM to get tags, importance, summary and merge with existing metadata."""
         try:
+            existing = await self.backend._get_by_id_full(memory_id)
+            if not existing:
+                return
+            existing_meta = existing["metadata"]
+            existing_tags = set(existing_meta.get("tags", []) or [])
+            existing_imp = existing_meta.get("importance", 3)
+
             prompt = EXTRACT_METADATA_PROMPT.format(content=text)
             response = await self.router.call_llm_background(prompt, json_mode=True)
-            import json
-            meta = json.loads(response)
+            meta = clean_and_parse_llm_json(response)
             update = {}
             if "tags" in meta and isinstance(meta["tags"], list):
-                update["tags"] = meta["tags"]
+                merged_tags = list(existing_tags | set(meta["tags"]))
+                update["tags"] = merged_tags
             if "importance" in meta and isinstance(meta["importance"], int):
-                update["importance"] = meta["importance"]
+                update["importance"] = max(existing_imp, meta["importance"])
             if "summary" in meta and isinstance(meta["summary"], str):
                 update["summary"] = meta["summary"]
             if update:
                 await self.backend.update_metadata(memory_id, update)
-                logger.info("Enrichment updated for %s: %s", memory_id, update)
+                logger.info("Enrichment merged for %s: %s", memory_id, update)
             else:
                 logger.info("Enrichment produced no usable fields for %s: %s", memory_id, meta)
         except Exception as e:
@@ -500,18 +508,20 @@ class MemoryManager:
             logger.info("Memory soft-deleted: %s", memory_id)
         return success
 
-    async def delete_memories_by_session(self, session_id: str) -> int:
-        tag = f"session:{session_id[:8]}"
+    async def delete_memories_by_session(self, session_id: str, user_id: str = "") -> int:
+        tag = f"session:{session_id}"
         if hasattr(self.backend, "delete_by_tag"):
-            return await self.backend.delete_by_tag(tag)
+            uid = user_id or self.config.default_user_id
+            return await self.backend.delete_by_tag(uid, tag)
         return 0
 
-    async def preserve_important_memories(self, session_id: str) -> int:
+    async def preserve_important_memories(self, session_id: str, user_id: str = "") -> int:
         """Copy important session memories to knowledge level before cascade delete."""
-        tag = f"session:{session_id[:8]}"
+        tag = f"session:{session_id}"
         if not hasattr(self.backend, "list_by_tag"):
             return 0
-        memories = await self.backend.list_by_tag(tag)
+        uid = user_id or self.config.default_user_id
+        memories = await self.backend.list_by_tag(uid, tag)
         KEYWORDS = {
             "plan", "kế hoạch", "architecture", "design decision",
             "quyết định", "thiết kế", "next step", "tiếp theo",
@@ -556,7 +566,7 @@ class MemoryManager:
     async def list_memories(
         self, limit: int = 100, offset: int = 0, user_id: str = None
     ) -> List[MemoryRecord]:
-        """List memories for a user (excludes archived)."""
+        """List memories for a user (archived filter pushed to SQL)."""
         user_id = user_id or self.config.default_user_id
         results = await self.backend.list_all(user_id, limit, offset)
         return [
@@ -569,5 +579,4 @@ class MemoryManager:
                 timestamp=m["metadata"].get("timestamp", ""),
             )
             for m in results
-            if not m.get("metadata", {}).get("archived")
         ]

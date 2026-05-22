@@ -81,7 +81,9 @@ SAVE_CONTEXT_INSTRUCTION = """[CRITICAL ALERT]: Your conversation memory is vola
 To ensure your decisions are preserved across terminal reboots, you are mandated
 to trigger `save_context_pair` immediately after your text stream resolution."""
 
-ATOMIC_FACT_EXTRACT_PROMPT = """You are an atomic fact extractor. Below is a conversation between a user and an AI assistant. Extract all standalone, independent facts from this conversation.
+import string
+
+ATOMIC_FACT_EXTRACT_PROMPT = string.Template("""You are an atomic fact extractor. Below is a conversation between a user and an AI assistant. Extract all standalone, independent facts from this conversation.
 
 Rules:
 - Each fact must be a short, clear assertion containing exactly ONE piece of information
@@ -92,11 +94,11 @@ Rules:
 - Use the original language of the information (Vietnamese or English)
 
 Return ONLY a valid JSON object matching this exact schema:
-{{
+{
   "facts": [
-    {{"fact": "short assertion here", "confidence": "high", "tags": ["tag1"], "relation": "HAS_PREFERENCE"}}
+    {"fact": "short assertion here", "confidence": "high", "tags": ["tag1"], "relation": "HAS_PREFERENCE"}
   ]
-}}
+}
 
 - confidence: "high" for explicit statements, "medium" for strong implications, "low" for guesses
 - tags: 1-3 relevant category tags (lowercase)
@@ -104,11 +106,11 @@ Return ONLY a valid JSON object matching this exact schema:
 - Do not include any conversational filler, intro, or markdown code blocks
 
 Conversation:
-{conversation}
+${conversation}
 
-Output:"""
+Output:""")
 
-ATOMIC_FACT_BATCH_PROMPT = """You are an atomic fact extractor. Below are multiple conversations between a user and an AI assistant. Extract all standalone, independent facts from ALL conversations combined.
+ATOMIC_FACT_BATCH_PROMPT = string.Template("""You are an atomic fact extractor. Below are multiple conversations between a user and an AI assistant. Extract all standalone, independent facts from ALL conversations combined.
 
 Rules:
 - Each fact must be a short, clear assertion containing exactly ONE piece of information
@@ -119,11 +121,11 @@ Rules:
 - Use the original language of the information (Vietnamese or English)
 
 Return ONLY a valid JSON object matching this exact schema:
-{{
+{
   "facts": [
-    {{"fact": "short assertion here", "confidence": "high", "tags": ["tag1"], "relation": "HAS_PREFERENCE"}}
+    {"fact": "short assertion here", "confidence": "high", "tags": ["tag1"], "relation": "HAS_PREFERENCE"}
   ]
-}}
+}
 
 - confidence: "high" for explicit statements, "medium" for strong implications, "low" for guesses
 - tags: 1-3 relevant category tags (lowercase)
@@ -131,6 +133,6 @@ Return ONLY a valid JSON object matching this exact schema:
 - Do not include any conversational filler, intro, or markdown code blocks
 
 Conversations:
-{conversations}
+${conversations}
 
-Output:"""
+Output:""")

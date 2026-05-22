@@ -8,6 +8,7 @@ from ..memory.session_store import SessionStore
 from ..memory.fact_extractor import FactExtractor
 from ..scanner import CodebaseScanner
 from ..errors import MemoryMeshError
+from ..utils.json_parser import clean_and_parse_llm_json
 from ..prompts import RECALL_INSTRUCTION, SAVE_CONTEXT_INSTRUCTION, SESSION_COMPACT_PROMPT, BOOTSTRAP_SNAPSHOT_PROMPT
 
 _MAGENTA = "\033[1;35m"
@@ -67,7 +68,7 @@ class ToolHandlers:
                 logger.warning("Context log failed: %s", e)
 
     def _session_tag(self) -> str:
-        return f"session:{self._current_session_id[:8]}" if self._current_session_id else ""
+        return f"session:{self._current_session_id}" if self._current_session_id else ""
 
     async def _save_context_memory(self, role: str, content: str, tool_name: str = ""):
         if not (self._current_session_id and role in ("user", "assistant") and content.strip()):
@@ -262,7 +263,7 @@ class ToolHandlers:
             prompt = BOOTSTRAP_SNAPSHOT_PROMPT.format(log=log_text)
             try:
                 response = await self.manager.router.call_llm_background(prompt, json_mode=True)
-                data = json.loads(response.strip())
+                data = clean_and_parse_llm_json(response)
             except Exception as e:
                 logger.warning("LLM bootstrap snapshot failed, using fallback: %s", e)
                 data = {
@@ -315,7 +316,7 @@ class ToolHandlers:
                 relation = item.get("relation", "")
                 if relation:
                     fact_tags.append(f"relation:{relation}")
-                importance = self._fact_extractor._confidence_to_importance(item.get("confidence", "medium"))
+                importance = item.get("importance", 3)
                 await self.manager.add_memory(
                     text=item["fact"],
                     tags=fact_tags,
@@ -650,6 +651,7 @@ class ToolHandlers:
                 system_prompt=system_prompt,
                 workspace_path=workspace_path,
                 auto_close_stale=True,
+                stale_minutes=self.manager.config.session.stale_session_minutes,
             )
             self._current_session_id = session_id
             self._exchange_unsaved = False
@@ -748,12 +750,12 @@ class ToolHandlers:
             await self._flush_fact_buffer()
 
             # Preserve important memories before cascade delete
-            preserved = await self.manager.preserve_important_memories(session_id)
+            preserved = await self.manager.preserve_important_memories(session_id, user_id)
             if preserved:
                 _log_bg("Preserve", f"Preserved {preserved} important memories to knowledge level", emoji="💾")
 
             # Cascade delete: xóa memories thuộc session này
-            deleted = await self.manager.delete_memories_by_session(session_id)
+            deleted = await self.manager.delete_memories_by_session(session_id, user_id)
             if deleted:
                 _log_bg("Cleanup", f"Deleted {deleted} memories for session {session_id[:8]}", emoji="🧹")
 

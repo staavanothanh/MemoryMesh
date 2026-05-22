@@ -56,3 +56,11 @@ class MemoryBackend(Protocol):
     ) -> List[Dict[str, Any]]:
         """List all memories of a user, with pagination."""
         ...
+
+    async def list_by_tag(self, user_id: str, tag: str) -> List[Dict[str, Any]]:
+        """List non-deleted memories matching a specific tag."""
+        ...
+
+    async def delete_by_tag(self, user_id: str, tag: str) -> int:
+        """Delete all non-deleted memories matching a tag. Returns count deleted."""
+        ...

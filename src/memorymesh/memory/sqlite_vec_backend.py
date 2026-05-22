@@ -4,6 +4,7 @@ Replaces ChromaMemoryBackend + FTSBackend + HybridBackend.
 """
 import json
 import re
+import math
 import uuid
 import logging
 from datetime import datetime, timezone
@@ -18,9 +19,38 @@ logger = logging.getLogger(__name__)
 DIM = 384
 
 
+class TransactionContext:
+    """Async context manager for safe SQLite transactions.
+
+    Wraps BEGIN/COMMIT/ROLLBACK with proper exception handling.
+    Works with aiosqlite < 0.23 (no built-in transaction() method).
+    """
+
+    def __init__(self, db: aiosqlite.Connection):
+        self._db = db
+
+    async def __aenter__(self):
+        await self._db.execute("BEGIN")
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        if exc_type is not None:
+            await self._db.rollback()
+        else:
+            await self._db.commit()
+
+
 def sanitize_fts_query(query: str) -> str:
     cleaned = re.sub(r'[^\w\s]', ' ', query)
     return " ".join(cleaned.split())
+
+
+def normalize_l2(vector: List[float]) -> List[float]:
+    squared_sum = sum(x ** 2 for x in vector)
+    magnitude = math.sqrt(squared_sum)
+    if magnitude == 0:
+        return vector
+    return [x / magnitude for x in vector]
 
 
 def load_vec_extension(conn):
@@ -65,6 +95,7 @@ class SqliteVecBackend:
         )
         await self._db.execute("PRAGMA journal_mode=WAL")
         await self._db.execute("PRAGMA busy_timeout=5000")
+        await self._db.execute("PRAGMA foreign_keys = ON")
         await self._db.execute("PRAGMA cache_size = -20000")
         await self._db.execute("PRAGMA mmap_size = 268435456")
         await self._db.execute("PRAGMA temp_store = MEMORY")
@@ -102,7 +133,7 @@ class SqliteVecBackend:
             "CREATE INDEX IF NOT EXISTS idx_mem_time ON memories(created_at DESC)"
         )
         await self._db.execute(
-            "CREATE INDEX IF NOT EXISTS idx_mem_deleted ON memories(deleted)"
+            "CREATE INDEX IF NOT EXISTS idx_mem_deleted ON memories(user_id, deleted)"
         )
         # Table 2: vector ANN (sqlite-vec)
         await self._db.execute("""
@@ -164,9 +195,10 @@ class SqliteVecBackend:
             **(metadata or {}),
         }
         importance = meta.get("importance", 3)
-        vec_bytes = np.array(embedding, dtype=np.float32).tobytes()
+        normalized = normalize_l2(embedding)
+        vec_bytes = np.array(normalized, dtype=np.float32).tobytes()
 
-        async with self._db.execute("BEGIN"):
+        async with TransactionContext(self._db):
             await self._db.execute(
                 """INSERT INTO memories
                    (id, user_id, content, metadata_json, level, importance,
@@ -188,18 +220,16 @@ class SqliteVecBackend:
                    VALUES ('add', ?, ?, ?, ?)""",
                 (memory_id, user_id, content[:200], now),
             )
-        await self._db.commit()
         return memory_id
 
     async def delete(self, memory_id: str) -> bool:
         now = datetime.now(timezone.utc).isoformat()
-        async with self._db.execute("BEGIN"):
+        async with TransactionContext(self._db):
             cursor = await self._db.execute(
                 "SELECT user_id FROM memories WHERE id = ?", (memory_id,)
             )
             row = await cursor.fetchone()
             if not row:
-                await self._db.commit()
                 return False
             uid = row["user_id"]
             await self._db.execute(
@@ -216,7 +246,6 @@ class SqliteVecBackend:
                    VALUES ('delete', ?, ?, '', ?)""",
                 (memory_id, uid, now),
             )
-        await self._db.commit()
         return True
 
     async def update(
@@ -228,7 +257,7 @@ class SqliteVecBackend:
             return False
         merged_meta = {**existing["metadata"], **metadata, "updated_at": now}
         importance = metadata.get("importance", existing["importance"])
-        async with self._db.execute("BEGIN"):
+        async with TransactionContext(self._db):
             await self._db.execute(
                 """UPDATE memories
                    SET content=?, metadata_json=?, importance=?, updated_at=?
@@ -239,7 +268,6 @@ class SqliteVecBackend:
                 "UPDATE memory_fts SET content=? WHERE memory_id=?",
                 (content, memory_id),
             )
-        await self._db.commit()
         return True
 
     async def update_metadata(self, memory_id: str, metadata: Dict[str, Any]) -> bool:
@@ -274,7 +302,7 @@ class SqliteVecBackend:
             ids,
         )
         rows = await cursor.fetchall()
-        async with self._db.execute("BEGIN"):
+        async with TransactionContext(self._db):
             for row in rows:
                 meta = json.loads(row["metadata_json"])
                 meta[flag] = value
@@ -283,7 +311,6 @@ class SqliteVecBackend:
                     "UPDATE memories SET metadata_json=?, updated_at=? WHERE id=?",
                     (json.dumps(meta), now, row["id"]),
                 )
-        await self._db.commit()
 
     async def soft_delete(self, memory_id: str) -> bool:
         """Mark memory as deleted (keeps vec + fts — trigger handles cleanup)."""
@@ -312,7 +339,8 @@ class SqliteVecBackend:
         Step 1: pure ANN search against vec_memories (no filter)
         Step 2: filter by user_id / level / deleted in memories table
         """
-        vec_bytes = np.array(embedding, dtype=np.float32).tobytes()
+        normalized = normalize_l2(embedding)
+        vec_bytes = np.array(normalized, dtype=np.float32).tobytes()
         pool = max(top_k * 2, 10)
 
         cursor = await self._db.execute(
@@ -430,11 +458,12 @@ class SqliteVecBackend:
     # List / enumerate
     # ------------------------------------------------------------------
 
-    async def list_by_tag(self, tag: str) -> List[Dict[str, Any]]:
+    async def list_by_tag(self, user_id: str, tag: str) -> List[Dict[str, Any]]:
         cursor = await self._db.execute(
-            """SELECT id, user_id, content, metadata_json, level, importance
-               FROM memories WHERE metadata_json LIKE ? AND deleted = 0""",
-            (f"%{tag}%",),
+            """SELECT m.id, m.user_id, m.content, m.metadata_json, m.level, m.importance
+               FROM memories m, json_each(json_extract(m.metadata_json, '$.tags'))
+               WHERE m.user_id = ? AND json_each.value = ? AND m.deleted = 0""",
+            (user_id, tag),
         )
         rows = await cursor.fetchall()
         return [
@@ -449,17 +478,18 @@ class SqliteVecBackend:
             for r in rows
         ]
 
-    async def delete_by_tag(self, tag: str) -> int:
-        cursor = await self._db.execute(
-            "SELECT id FROM memories WHERE metadata_json LIKE ? AND deleted = 0",
-            (f"%{tag}%",),
-        )
-        ids = [r[0] for r in await cursor.fetchall()]
-        if not ids:
-            return 0
-        placeholders = ",".join("?" for _ in ids)
+    async def delete_by_tag(self, user_id: str, tag: str) -> int:
         now = datetime.now(timezone.utc).isoformat()
-        async with self._db.execute("BEGIN"):
+        async with TransactionContext(self._db):
+            cursor = await self._db.execute(
+                """SELECT m.id FROM memories m, json_each(json_extract(m.metadata_json, '$.tags'))
+                   WHERE m.user_id = ? AND json_each.value = ? AND m.deleted = 0""",
+                (user_id, tag),
+            )
+            ids = [r[0] for r in await cursor.fetchall()]
+            if not ids:
+                return 0
+            placeholders = ",".join("?" for _ in ids)
             await self._db.execute(
                 f"DELETE FROM memories WHERE id IN ({placeholders})", ids
             )
@@ -469,8 +499,7 @@ class SqliteVecBackend:
             await self._db.execute(
                 f"DELETE FROM memory_fts WHERE memory_id IN ({placeholders})", ids
             )
-        await self._db.commit()
-        logger.info("Deleted %d memories by tag '%s'", len(ids), tag)
+        logger.info("Deleted %d memories by tag '%s' user '%s'", len(ids), tag, user_id)
         return len(ids)
 
     async def list_all(
@@ -480,6 +509,7 @@ class SqliteVecBackend:
             """SELECT id, content, metadata_json
                FROM memories
                WHERE user_id = ? AND deleted = 0
+                 AND COALESCE(json_extract(metadata_json, '$.archived'), 0) = 0
                ORDER BY created_at DESC
                LIMIT ? OFFSET ?""",
             (user_id, limit, offset),

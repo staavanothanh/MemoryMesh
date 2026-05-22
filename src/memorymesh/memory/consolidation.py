@@ -9,6 +9,7 @@ from typing import List, Dict, Any, Optional
 from ..config import AppConfig
 from ..router import RouterClient
 from ..embedder import get_embedding
+from ..utils.json_parser import clean_and_parse_llm_json
 
 logger = logging.getLogger(__name__)
 
@@ -111,7 +112,7 @@ class ConsolidationEngine:
             )
             prompt = CONSOLIDATION_PROMPT.format(contents=contents)
             response = await self.router.call_llm(prompt)
-            meta = json.loads(response)
+            meta = clean_and_parse_llm_json(response)
 
             new_content = meta.get("content", cluster[0]["content"])
             new_tags = meta.get("tags", [])
@@ -162,7 +163,7 @@ class ConsolidationEngine:
             )
             prompt = FACT_CONTRADICTION_PROMPT.format(facts=facts_text)
             response = await self.router.call_llm(prompt)
-            data = json.loads(response)
+            data = clean_and_parse_llm_json(response)
             if not data.get("contradictions_found"):
                 return
             for resolution in data.get("resolutions", []):

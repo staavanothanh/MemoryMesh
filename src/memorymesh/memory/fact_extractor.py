@@ -9,6 +9,7 @@ import tiktoken
 from ..config import AppConfig
 from ..router import RouterClient
 from ..prompts import ATOMIC_FACT_EXTRACT_PROMPT, ATOMIC_FACT_BATCH_PROMPT
+from ..utils.json_parser import clean_and_parse_llm_json
 
 logger = logging.getLogger(__name__)
 
@@ -25,10 +26,10 @@ class FactExtractor:
         """Extract atomic facts from a single conversation via LLM."""
         if not conversation.strip():
             return []
-        prompt = ATOMIC_FACT_EXTRACT_PROMPT.format(conversation=conversation)
+        prompt = ATOMIC_FACT_EXTRACT_PROMPT.substitute(conversation=conversation)
         try:
             response = await self.router.call_llm_background(prompt, json_mode=True)
-            data = json.loads(response)
+            data = clean_and_parse_llm_json(response)
             raw_facts = data.get("facts", [])
             if not isinstance(raw_facts, list):
                 logger.warning("FactExtractor: 'facts' is not a list: %s", type(raw_facts))
@@ -44,10 +45,10 @@ class FactExtractor:
         if not active:
             return []
         combined = "\n---\n".join(f"Conversation {i+1}:\n{c}" for i, c in enumerate(active))
-        prompt = ATOMIC_FACT_BATCH_PROMPT.format(conversations=combined)
+        prompt = ATOMIC_FACT_BATCH_PROMPT.substitute(conversations=combined)
         try:
             response = await self.router.call_llm_background(prompt, json_mode=True)
-            data = json.loads(response)
+            data = clean_and_parse_llm_json(response)
             raw_facts = data.get("facts", [])
             if not isinstance(raw_facts, list):
                 logger.warning("FactExtractor batch: 'facts' is not a list: %s", type(raw_facts))
@@ -79,9 +80,14 @@ class FactExtractor:
                 truncated = self._tokenizer.decode(tokens[:_MAX_FACT_TOKENS])
                 fact_text = truncated + "..."
 
+            confidence = item.get("confidence", "medium")
+            if not isinstance(confidence, str) or confidence.lower() not in ("high", "medium", "low"):
+                confidence = "medium"
+
             valid.append({
                 "fact": fact_text,
-                "confidence": item.get("confidence", "medium") if isinstance(item.get("confidence"), str) else "medium",
+                "confidence": confidence,
+                "importance": self._confidence_to_importance(confidence),
                 "tags": item.get("tags", []) if isinstance(item.get("tags"), list) else [],
                 "relation": item.get("relation", "") if isinstance(item.get("relation"), str) else "",
             })

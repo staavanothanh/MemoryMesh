@@ -36,6 +36,7 @@ class SessionConfig:
     auto_compact_on_end: bool = True
     compact_threshold: int = 20
     max_context_log: int = 500
+    stale_session_minutes: int = 30
 
     def validate(self):
         import os
@@ -112,6 +113,7 @@ class AppConfig:
                 auto_compact_on_end=os.getenv("SESSION_AUTO_COMPACT_ON_END", "true").lower() == "true",
                 compact_threshold=int(os.getenv("SESSION_COMPACT_THRESHOLD", "20")),
                 max_context_log=int(os.getenv("SESSION_MAX_CONTEXT_LOG", "500")),
+                stale_session_minutes=int(os.getenv("SESSION_STALE_MINUTES", "30")),
             ),
             instinct=InstinctConfig(
                 db_path=os.getenv("INSTINCT_DB_PATH", "./db/instincts.db"),

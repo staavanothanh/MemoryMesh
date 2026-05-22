@@ -34,6 +34,7 @@ class SessionStore:
         self._db.row_factory = aiosqlite.Row
         await self._db.execute("PRAGMA journal_mode=WAL")
         await self._db.execute("PRAGMA busy_timeout=5000")
+        await self._db.execute("PRAGMA foreign_keys = ON")
         await self._db.execute("""
             CREATE TABLE IF NOT EXISTS sessions (
                 session_id TEXT PRIMARY KEY,
@@ -67,6 +68,12 @@ class SessionStore:
                 FOREIGN KEY (session_id) REFERENCES sessions(session_id)
             )
         """)
+        await self._db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_context_log_session ON context_log(session_id)"
+        )
+        await self._db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_sessions_user_status ON sessions(user_id, status)"
+        )
         await self._migrate_sessions_schema()
         await self._db.commit()
 
@@ -90,17 +97,26 @@ class SessionStore:
             await self._db.close()
             self._db = None
 
-    async def _close_stale_sessions(self, user_id: str):
+    async def _close_stale_sessions(self, user_id: str, stale_minutes: int = 0):
         now = datetime.now(timezone.utc).isoformat()
-        await self._db.execute(
-            "UPDATE sessions SET status = 'ended', ended_at = ?, updated_at = ? WHERE user_id = ? AND status = 'active'",
-            (now, now, user_id),
-        )
+        if stale_minutes > 0:
+            threshold_s = stale_minutes * 60
+            await self._db.execute(
+                """UPDATE sessions SET status = 'ended', ended_at = ?, updated_at = ?
+                   WHERE user_id = ? AND status = 'active'
+                     AND (strftime('%s','now') - strftime('%s',updated_at)) > ?""",
+                (now, now, user_id, threshold_s),
+            )
+        else:
+            await self._db.execute(
+                "UPDATE sessions SET status = 'ended', ended_at = ?, updated_at = ? WHERE user_id = ? AND status = 'active'",
+                (now, now, user_id),
+            )
         await self._db.commit()
 
-    async def create_session(self, user_id: str, system_prompt: str = "", workspace_path: str = "", auto_close_stale: bool = True) -> str:
+    async def create_session(self, user_id: str, system_prompt: str = "", workspace_path: str = "", auto_close_stale: bool = True, stale_minutes: int = 0) -> str:
         if auto_close_stale:
-            await self._close_stale_sessions(user_id)
+            await self._close_stale_sessions(user_id, stale_minutes)
         session_id = str(uuid.uuid4())
         now = datetime.now(timezone.utc).isoformat()
         await self._db.execute(
@@ -186,11 +202,11 @@ class SessionStore:
 
     async def get_context_log(self, session_id: str, limit: int = 50) -> List[Dict[str, Any]]:
         cursor = await self._db.execute(
-            "SELECT * FROM context_log WHERE session_id = ? ORDER BY id ASC LIMIT ?",
+            "SELECT * FROM context_log WHERE session_id = ? ORDER BY id DESC LIMIT ?",
             (session_id, limit),
         )
         rows = await cursor.fetchall()
-        return [dict(r) for r in rows]
+        return [dict(r) for r in reversed(rows)]
 
     async def get_context_log_count(self, session_id: str) -> int:
         cursor = await self._db.execute(
