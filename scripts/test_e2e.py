@@ -201,7 +201,7 @@ async def test_e2e():
     archived = await manager.forget_memory(mid2)
     assert archived is True
     after_archive = await manager.list_memories(limit=10, user_id="Shinn")
-    assert mid2 not in [r.id for r in after_archive]
+    assert mid2 not in [r["id"] for r in after_archive]
     ok("forget_memory archives and hides from list")
 
     # 24. archive_memory / unarchive_memory

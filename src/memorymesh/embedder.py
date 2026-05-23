@@ -30,7 +30,7 @@ def _sync_compute(text: str, model_name: str) -> List[float]:
     return model.encode(text).tolist()
 
 
-_cached_compute = lru_cache(maxsize=128)(_sync_compute)
+_cached_compute = lru_cache(maxsize=64)(_sync_compute)
 
 
 async def get_embedding(text: str, model_name: str) -> List[float]:

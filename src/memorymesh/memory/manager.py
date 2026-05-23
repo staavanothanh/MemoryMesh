@@ -113,6 +113,8 @@ class MemoryManager:
             tags = []
         if self.config.instinct.enabled:
             try:
+                if self.instinct_store._db is None:
+                    await self.instinct_store.initialize()
                 suggestions = await self.instinct_engine.apply_instincts(user_id, text, tags)
                 for s in suggestions.get("suggested_tags", []):
                     if s["tag"] not in tags and s["confidence"] > 0.5:

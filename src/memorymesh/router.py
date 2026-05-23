@@ -13,9 +13,9 @@ logger = logging.getLogger(__name__)
 
 
 class RouterClient:
-    _semaphore = asyncio.Semaphore(3)
 
     def __init__(self, config: RouterConfig):
+        self._semaphore = asyncio.Semaphore(3)
         self.config = config
         self._failure_count = 0
         self._last_failure_time = 0.0

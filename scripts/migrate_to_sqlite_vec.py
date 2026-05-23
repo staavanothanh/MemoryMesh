@@ -19,7 +19,7 @@ from datetime import datetime, timezone
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 logger = logging.getLogger("migrate")
 
-DIM = 384
+DIM = 0  # auto-detected from first valid embedding
 
 
 def read_chroma(chroma_path: str) -> list[dict]:
@@ -134,6 +134,11 @@ async def migrate(chroma_path: str, fts_path: str, vec_path: str):
         except Exception:
             skipped += 1
             continue
+
+        # Auto-detect embedding dimension from first valid embedding
+        if DIM == 0:
+            DIM = len(embedding)
+            logger.info("Auto-detected embedding dimension: %d", DIM)
 
         if len(embedding) != DIM:
             logger.warning("Skipping %s: embedding dim %d != %d", mem_id, len(embedding), DIM)

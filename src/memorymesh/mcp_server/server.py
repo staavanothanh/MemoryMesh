@@ -114,7 +114,7 @@ class MemoryMeshServer:
             result = await handler(arguments)
 
             # LỚP 2: Auto-save mọi tool call (trừ read-only để tránh loop ghi đè)
-            read_only_tools = ("ping", "list_sessions", "list_memories", "get_session_context")
+            read_only_tools = ("ping", "list_sessions", "list_memories", "get_session_context", "recall")
             if name not in read_only_tools:
                 asyncio.create_task(
                     self._safely_auto_save_tool(name, arguments, result)
@@ -219,8 +219,13 @@ class MemoryMeshServer:
                     self._init_options(),
                 )
 
+        async def health(request):
+            from starlette.responses import JSONResponse
+            return JSONResponse({"status": "ok", "service": "memorymesh"})
+
         app = Starlette(
             routes=[
+                Route("/health", endpoint=health),
                 Route("/sse", endpoint=handle_sse),
                 Mount("/messages/", app=sse.handle_post_message),
             ],
