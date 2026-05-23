@@ -550,7 +550,8 @@ class ToolHandlers:
             self._exchange_unsaved = False
 
             # Extract atomic facts in background (non-blocking)
-            asyncio.create_task(self._extract_and_save_facts(combined, user_id))
+            if self.manager.config.session.auto_extract_facts:
+                asyncio.create_task(self._extract_and_save_facts(combined, user_id))
 
             return {"status": "success", "data": {"narrative_id": narrative_id, "session_id": self._current_session_id}}
         except MemoryMeshError as e:

@@ -30,6 +30,8 @@ cp .env.example .env             # configure your LLM endpoint
 python -m memorymesh             # start standalone MCP server
 ```
 
+> **Note:** On the very first run, MemoryMesh will automatically download the `sentence-transformers` embedding model (~100–300 MB) to your local cache. This may take 1–2 minutes depending on your network connection.
+
 ## Architecture
 
 ```
@@ -49,6 +51,30 @@ User -> Any MCP Client -> LLM (via your router)
 - Background tasks (enrichment, consolidation, fact extraction) are rate-limited
 - Session-level memories auto-expire after 7 days
 
+## Cost Management & Dual-LLM Architecture
+
+MemoryMesh uses **two independent LLM layers** to separate interactive performance from background cost:
+
+| Layer | Variable | Typical Models | Purpose |
+|-------|----------|----------------|---------|
+| **Foreground (Chat)** | `DEFAULT_MODEL` / `FALLBACK_MODEL` | GPT-5.5, Claude 4.7 Opus, Gemini 3.5 Flash, DeepSeek V4-Pro | Direct user interaction via the MCP client |
+| **Background (Data)** | `BACKGROUND_MODEL_POOL` | Gemini 2.5 Flash, Llama 3.1 8B, DeepSeek V4 Flash | Bootstrap snapshots, atomic fact extraction, session compaction |
+
+### How it works
+- Your **primary chat model** handles all user-facing reasoning — choose the best model you can afford.
+- **Background tasks** (fact extraction, snapshot generation, compaction) run on a separate pool of *free or low-cost* models defined in `BACKGROUND_MODEL_POOL`. The pool uses a **cascade strategy**: if the first model fails, it automatically tries the next in the list.
+- If `BACKGROUND_MODEL_POOL` is empty, background tasks fall back to your primary chat model.
+
+### Economy Mode
+Set `AUTO_EXTRACT_FACTS=false` in your `.env` to disable all automatic atomic fact extraction entirely. This eliminates background LLM calls (zero token cost) while keeping narrative-thread storage and cross-session recall fully operational.
+
+### Recommended background models
+These models deliver excellent results for summarization and extraction at near-zero cost:
+
+```env
+BACKGROUND_MODEL_POOL=openrouter/google/gemini-2.5-flash,openrouter/deepseek/deepseek-v4-flash,openrouter/qwen/qwen-2.5-7b-instruct,openrouter/meta-llama/llama-3.1-8b-instruct
+```
+
 ## Setup
 
 ### Prerequisites
@@ -67,8 +93,10 @@ cp .env.example .env
 |----------|---------|-------------|
 | `ROUTER_URL` | `http://127.0.0.1:20128/v1` | LLM endpoint |
 | `DEFAULT_MODEL` | `your-model` | Primary LLM model |
+| `BACKGROUND_MODEL_POOL` | — | Comma-separated list of free/cheap models for background tasks |
 | `EMBEDDING_MODEL` | `paraphrase-multilingual-MiniLM-L12-v2` | Embedding model |
 | `VEC_DB_PATH` | `./db/memory.db` | SQLite database path |
+| `AUTO_EXTRACT_FACTS` | `true` | Set to `false` to disable automatic fact extraction (Economy Mode) |
 | `DEFAULT_USER_ID` | `your_user_id` | Default user |
 | `MCP_TRANSPORT` | `stdio` | `stdio` or `sse` |
 | `MCP_PORT` | `8090` | SSE port |
@@ -140,8 +168,21 @@ src/memorymesh/
     handlers.py      Tool handler implementations
     tools.py         Tool schema definitions
 tests/
-  130+ tests (pytest, asyncio_mode=auto)
+   130+ tests (pytest, asyncio_mode=auto)
 ```
+
+## Security Notice
+
+> **CRITICAL:** MemoryMesh is a local-first system. All conversation logs, project contexts, and extracted memories are stored as **plaintext** in SQLite databases (`./db/` and `.opencode/data/`).
+>
+> These database files may contain sensitive information including API keys, proprietary code snippets, or personal data discussed during sessions. **Never commit these database files to a public repository.**
+>
+> Ensure the following patterns are listed in your `.gitignore` (they are already included by default):
+> ```
+> db/
+> .opencode/data/
+> .env
+> ```
 
 ## License
 

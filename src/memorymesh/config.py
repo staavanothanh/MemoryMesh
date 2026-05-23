@@ -34,6 +34,7 @@ class SessionConfig:
     auto_scan_codebase: bool = True
     auto_recall_on_start: bool = True
     auto_compact_on_end: bool = True
+    auto_extract_facts: bool = True
     compact_threshold: int = 20
     max_context_log: int = 500
     stale_session_minutes: int = 30
@@ -115,6 +116,7 @@ class AppConfig:
                 auto_scan_codebase=os.getenv("SESSION_AUTO_SCAN_CODEBASE", "true").lower() == "true",
                 auto_recall_on_start=os.getenv("SESSION_AUTO_RECALL_ON_START", "true").lower() == "true",
                 auto_compact_on_end=os.getenv("SESSION_AUTO_COMPACT_ON_END", "true").lower() == "true",
+                auto_extract_facts=os.getenv("AUTO_EXTRACT_FACTS", "true").lower() == "true",
                 compact_threshold=int(os.getenv("SESSION_COMPACT_THRESHOLD", "20")),
                 max_context_log=int(os.getenv("SESSION_MAX_CONTEXT_LOG", "500")),
                 stale_session_minutes=int(os.getenv("SESSION_STALE_MINUTES", "30")),
