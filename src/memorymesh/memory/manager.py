@@ -103,8 +103,6 @@ class MemoryManager:
         user_id = user_id or self.config.default_user_id
         if level not in ("user", "session", "knowledge"):
             raise ValidationError("level must be one of: user, session, knowledge")
-        if len(text) > self.config.max_memory_length:
-            raise ValidationError(f"Memory content exceeds max length {self.config.max_memory_length}")
         if importance < 1 or importance > 5:
             raise ValidationError("Importance must be between 1 and 5")
 

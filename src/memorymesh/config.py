@@ -87,7 +87,6 @@ class AppConfig:
     default_user_id: str = "Shinn"
     mcp_transport: Literal["stdio", "sse"] = "stdio"
     mcp_port: int = 8090
-    max_memory_length: int = 2000
     log_level: str = "INFO"
     token_budget: int = 1000
     truncation_weight_score: float = 0.6

@@ -28,7 +28,7 @@ source .venv/bin/activate        # Linux/macOS
 # .venv\Scripts\activate         # Windows
 
 pip install -e ".[test]"         # cài đặt kèm test deps
-python -m memorymesh init         # thiết lập một lệnh (tạo .env, cấu hình MCP, hướng dẫn)
+python -m memorymesh init         # thiết lập một lệnh (tạo .env, cấu hình MCP)
 
 # Khởi động OpenCode — MCP server tự động khởi chạy
 opencode
@@ -143,11 +143,12 @@ cp .env.example .env
 
 ### Sử dụng với CLI Agent
 
-MemoryMesh là một **máy chủ MCP** — tương thích với mọi MCP client:
+MemoryMesh là một **máy chủ MCP** — tương thích với mọi MCP client.
+MemoryMesh **Zero-Config cho AI Agent** — mọi hướng dẫn vận hành đều được nhúng sẵn trong phần mô tả công cụ MCP (không cần file hướng dẫn riêng):
 
 | Agent | Thiết lập |
 |-------|-----------|
-| **OpenCode** | `python -m memorymesh init` tự động tạo `.opencode/opencode.json` + file hướng dẫn. Sau đó chỉ cần chạy `opencode`. |
+| **OpenCode** | `python -m memorymesh init` tự động tạo `.opencode/opencode.json`. Mọi hướng dẫn đã nằm trong description của MCP tools. Chỉ cần chạy `opencode`. |
 | **Claude Code** | Thêm MCP server vào cấu hình Claude Code |
 | **Cursor** | Thêm MCP server trong Cursor settings |
 | **Continue.dev** | Thêm MCP server trong `~/.continue/config.json` |
@@ -214,16 +215,27 @@ tests/
 ## Thông báo Bảo mật
 
 > [!CAUTION]
-> **QUAN TRỌNG:** MemoryMesh là hệ thống ưu tiên máy cục bộ. Tất cả nhật ký hội thoại, ngữ cảnh dự án và ký ức được trích xuất đều được lưu trữ dưới dạng **văn bản thuần (plaintext)** trong cơ sở dữ liệu SQLite (`./db/` và `.opencode/data/`).
+> **QUAN TRỌNG:** MemoryMesh là hệ thống ưu tiên máy cục bộ. Tất cả nhật ký hội thoại, ngữ cảnh dự án và ký ức được trích xuất đều được lưu trữ dưới dạng **văn bản thuần (plaintext)** trong cơ sở dữ liệu SQLite (`./db/`).
 >
 > Các file cơ sở dữ liệu này có thể chứa thông tin nhạy cảm bao gồm khóa API, đoạn mã độc quyền hoặc dữ liệu cá nhân được thảo luận trong các phiên làm việc. **Không bao giờ commit các file cơ sở dữ liệu này vào kho lưu trữ công khai.**
 >
 > Đảm bảo các mẫu sau được liệt kê trong file `.gitignore` của bạn (chúng đã được bao gồm theo mặc định):
 > ```
 > db/
-> .opencode/data/
 > .env
 > ```
+
+## Bảo trì
+
+### Xây dựng lại Chỉ mục Vector
+
+Sau các thao tác cơ sở dữ liệu thủ công (ví dụ: xóa hàng loạt bằng DELETE), các chỉ mục Vector và FTS có thể bị không đồng bộ. Hãy chạy script sau để xây dựng lại toàn bộ chỉ mục:
+
+```bash
+python scripts/rebuild_vec.py
+```
+
+Script này sẽ đọc tất cả ký ức hợp lệ từ bảng `memories`, tính toán lại embedding cho từng ký ức, và tái tạo các bảng `vec_memories` và `memory_fts` từ đầu.
 
 ## Giấy phép
 

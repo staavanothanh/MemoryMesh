@@ -34,13 +34,6 @@ async def test_add_memory_success(memory_manager):
 
 
 @pytest.mark.asyncio
-async def test_add_memory_exceeds_max_length(memory_manager):
-    long_text = "x" * (memory_manager.config.max_memory_length + 1)
-    with pytest.raises(ValidationError, match="max length"):
-        await memory_manager.add_memory(text=long_text)
-
-
-@pytest.mark.asyncio
 async def test_add_memory_invalid_importance_below(memory_manager):
     with pytest.raises(ValidationError, match="Importance"):
         await memory_manager.add_memory(text="test", importance=0)

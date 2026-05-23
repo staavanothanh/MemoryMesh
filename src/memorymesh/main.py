@@ -3,7 +3,6 @@ import os
 import sys
 import subprocess
 from pathlib import Path
-from .prompts import get_agent_instructions
 
 
 OPencode_JSON_CONTENT = """\
@@ -31,8 +30,7 @@ OPencode_JSON_CONTENT = """\
       }},
       "enabled": true
     }}
-  }},
-  "instructions": ["{instructions_md}"]
+  }}
 }}
 """
 
@@ -100,26 +98,16 @@ LOG_LEVEL=INFO
     opencode_dir = target / ".opencode"
     opencode_dir.mkdir(exist_ok=True)
 
-    # ── 5. .opencode/memorymesh.md ──
-    md_file = opencode_dir / "memorymesh.md"
-    md_file.write_text(get_agent_instructions())
-    print(f"[ ok ] instruction file created at {md_file}")
-
-    # ── 6. .opencode/opencode.json (dynamic, with sys.executable) ──
+    # ── 5. .opencode/opencode.json (dynamic, with sys.executable) ──
     python_path = sys.executable.replace("\\", "/")
     user_id = os.environ.get("DEFAULT_USER_ID") or target.name
     opencode_json_path = opencode_dir / "opencode.json"
 
-    # Use relative data dir inside .opencode/ for portable config
-    data_dir = opencode_dir / "data"
-    data_dir.mkdir(exist_ok=True)
-
     json_content = OPencode_JSON_CONTENT.format(
         python=python_path,
-        vec_db=(data_dir / "memory.db").as_posix(),
-        session_db=(data_dir / "sessions.db").as_posix(),
+        vec_db=(db_dir / "memory.db").as_posix(),
+        session_db=(db_dir / "sessions.db").as_posix(),
         user_id=user_id,
-        instructions_md=("./.opencode/memorymesh.md").replace("\\", "/"),
     )
     opencode_json_path.write_text(json_content)
     print(f"[ ok ] MCP config created at {opencode_json_path}")
@@ -127,17 +115,15 @@ LOG_LEVEL=INFO
     print()
     print("  ── Setup complete ──")
     print()
-    print(f"  Python:   {python_path}")
-    print(f"  Workspace: {target}")
-    print(f"  User ID:   {user_id}")
+    print(f"  Database:  ./db/")
+    print(f"  Config:    {env_file}")
     print()
-    print("  Next steps:")
-    print(f"    1. Edit {env_file} to set your LLM endpoint and model")
-    print(f"    2. Run:  opencode")
-    print(f"    3. The MCP server starts automatically with OpenCode")
+    print("  [OpenCode Users]")
+    print("  Config auto-created at .opencode/opencode.json. Just run: opencode")
     print()
-    print("  Or run standalone:")
-    print(f"     python -m memorymesh")
+    print("  [Cursor / Cline / Continue Users]")
+    print("  Add this MCP Server to your IDE settings:")
+    print(f"  Command: {python_path} -m memorymesh")
 
 
 def main():

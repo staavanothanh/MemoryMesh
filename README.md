@@ -28,7 +28,7 @@ source .venv/bin/activate        # Linux/macOS
 # .venv\Scripts\activate         # Windows
 
 pip install -e ".[test]"         # install with test deps
-python -m memorymesh init        # one-command setup (creates .env, MCP config, instructions)
+python -m memorymesh init        # one-command setup (creates .env, MCP config)
 
 # Start OpenCode — MCP server auto-launches
 opencode
@@ -144,11 +144,12 @@ cp .env.example .env
 
 ### Using with CLI Agents
 
-MemoryMesh is an **MCP server** — compatible with any MCP client:
+MemoryMesh is an **MCP server** — compatible with any MCP client.
+MemoryMesh is **Zero-Config for AI Agents** — all operational instructions are baked directly into the MCP tool descriptions (no separate instruction file needed):
 
 | Agent | Setup |
 |-------|-------|
-| **OpenCode** | `python -m memorymesh init` generates `.opencode/opencode.json` + instruction file automatically. Then just run `opencode`. |
+| **OpenCode** | `python -m memorymesh init` auto-generates `.opencode/opencode.json`. All instructions are in the MCP tool descriptions. Just run `opencode`. |
 | **Claude Code** | Add MCP server in Claude Code config |
 | **Cursor** | Add MCP server in Cursor settings |
 | **Continue.dev** | Add MCP server in `~/.continue/config.json` |
@@ -215,16 +216,27 @@ tests/
 ## Security Notice
 
 > [!CAUTION]
-> **CRITICAL:** MemoryMesh is a local-first system. All conversation logs, project contexts, and extracted memories are stored as **plaintext** in SQLite databases (`./db/` and `.opencode/data/`).
+> **CRITICAL:** MemoryMesh is a local-first system. All conversation logs, project contexts, and extracted memories are stored as **plaintext** in SQLite databases (`./db/`).
 >
 > These database files may contain sensitive information including API keys, proprietary code snippets, or personal data discussed during sessions. **Never commit these database files to a public repository.**
 >
 > Ensure the following patterns are listed in your `.gitignore` (they are already included by default):
 > ```
 > db/
-> .opencode/data/
 > .env
 > ```
+
+## Maintenance
+
+### Rebuild Vector Index
+
+After manual database operations (e.g. bulk DELETE), the vector and FTS indexes may become inconsistent. Run the rebuild script to re-index all memories:
+
+```bash
+python scripts/rebuild_vec.py
+```
+
+This script reads all valid memories from `memories` table, recomputes their embeddings, and recreates the `vec_memories` and `memory_fts` tables from scratch.
 
 ## License
 
