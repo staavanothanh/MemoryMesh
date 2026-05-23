@@ -225,6 +225,9 @@ class ConsolidationEngine:
         - no workspace_path (ephemeral/garbage)
         - level = 'session' (chat logs)
         - age > ephemeral_memory_ttl_days (default 7)
+
+        High-importance or tagged session memories are promoted to 'user' level
+        (permanent) instead of being expired.
         """
         min_imp = self.config.consolidation.min_importance_to_keep
         ttl_days = self.config.consolidation.ephemeral_memory_ttl_days
@@ -233,6 +236,7 @@ class ConsolidationEngine:
         all_mems = await self.backend.get_with_embeddings(user_id, limit=self.batch_size)
         cutoff = datetime.now(timezone.utc) - timedelta(days=ttl_days)
         expired_count = 0
+        promoted_count = 0
         for m in all_mems:
             meta = m.get("metadata", {})
             if meta.get("expired") or meta.get("consolidated"):
@@ -240,23 +244,34 @@ class ConsolidationEngine:
             if meta.get("level") != "session":
                 continue
             imp = meta.get("importance", 3)
-            if imp >= min_imp:
-                continue
             wp = meta.get("workspace_path", "") or ""
             if wp:
                 continue
             ts = meta.get("timestamp", "")
-            if ts:
-                try:
-                    created = datetime.fromisoformat(ts)
-                    if created < cutoff:
-                        await self.backend.update_metadata(m["id"], {"expired": True})
-                        expired_count += 1
-                except (ValueError, TypeError):
-                    continue
+            if not ts:
+                continue
+            try:
+                created = datetime.fromisoformat(ts)
+            except (ValueError, TypeError):
+                continue
+            is_old = created < cutoff
+
+            # Promotion: high-importance or tagged session memories become permanent
+            tags = meta.get("tags", [])
+            if is_old and (imp >= 4 or any(t in str(tags).lower() for t in ("decision", "architecture", "convention"))):
+                await self.backend.update_metadata(m["id"], {"level": "user"})
+                promoted_count += 1
+                continue
+
+            # Expiry: low-importance, old, session-level memories
+            if is_old and imp < min_imp:
+                await self.backend.update_metadata(m["id"], {"expired": True})
+                expired_count += 1
         if expired_count:
             logger.info("MemoryDecay: Expired %d ephemeral memories for user %s", expired_count, user_id)
-        return expired_count
+        if promoted_count:
+            logger.info("MemoryDecay: Promoted %d session memories to permanent (user level) for user %s", promoted_count, user_id)
+        return expired_count + promoted_count
 
     async def run_for_user(self, user_id: str) -> int:
         """Run one consolidation pass. Returns number of merges performed."""

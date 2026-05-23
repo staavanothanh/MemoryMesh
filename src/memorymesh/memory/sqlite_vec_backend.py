@@ -6,6 +6,8 @@ import json
 import re
 import math
 import uuid
+import random
+import asyncio
 import logging
 from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional
@@ -23,19 +25,39 @@ class TransactionContext:
     """Async context manager for safe SQLite transactions.
 
     Wraps BEGIN/COMMIT/ROLLBACK with proper exception handling.
+    Retries on 'database is locked' with exponential backoff + jitter
+    to support concurrent multi-agent access.
     Works with aiosqlite < 0.23 (no built-in transaction() method).
     """
+
+    MAX_RETRIES = 5
+    BASE_DELAY = 0.05  # 50ms
 
     def __init__(self, db: aiosqlite.Connection):
         self._db = db
 
     async def __aenter__(self):
-        await self._db.execute("BEGIN")
-        return self
+        last_error = None
+        for attempt in range(self.MAX_RETRIES):
+            try:
+                await self._db.execute("BEGIN")
+                return self
+            except Exception as e:
+                err_str = str(e).lower()
+                if "database is locked" in err_str or "database is busy" in err_str:
+                    last_error = e
+                    delay = self.BASE_DELAY * (2 ** attempt) + random.uniform(0, 0.05)
+                    await asyncio.sleep(delay)
+                    continue
+                raise
+        raise last_error or RuntimeError("Transaction BEGIN failed after retries")
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         if exc_type is not None:
-            await self._db.rollback()
+            try:
+                await self._db.rollback()
+            except Exception:
+                pass
         else:
             await self._db.commit()
 
@@ -306,11 +328,12 @@ class SqliteVecBackend:
             return False
         merged = {**existing["metadata"], **metadata, "updated_at": now}
         importance = metadata.get("importance", existing["importance"])
+        new_level = metadata.get("level", existing.get("level"))
         await self._db.execute(
             """UPDATE memories
-               SET metadata_json=?, importance=?, updated_at=?
+               SET metadata_json=?, importance=?, level=?, updated_at=?
                WHERE id=?""",
-            (json.dumps(merged), importance, now, memory_id),
+            (json.dumps(merged), importance, new_level, now, memory_id),
         )
         await self._db.commit()
         return True
@@ -653,7 +676,7 @@ class SqliteVecBackend:
 
     async def _get_by_id_full(self, memory_id: str) -> Optional[Dict[str, Any]]:
         cursor = await self._db.execute(
-            """SELECT id, content, metadata_json, importance
+            """SELECT id, content, metadata_json, importance, level
                FROM memories WHERE id = ?""",
             (memory_id,),
         )
@@ -665,4 +688,5 @@ class SqliteVecBackend:
             "content": row["content"],
             "metadata": json.loads(row["metadata_json"]),
             "importance": row["importance"],
+            "level": row["level"],
         }

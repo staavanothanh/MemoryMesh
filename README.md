@@ -1,4 +1,16 @@
+<p align="center">
+  <a href="README.md"><img src="https://img.shields.io/badge/lang-en-red.svg" alt="English"></a>
+  <a href="README.vi.md"><img src="https://img.shields.io/badge/lang-vi-blue.svg" alt="Tiếng Việt"></a>
+</p>
+
 # MemoryMesh
+
+<p align="center">
+  <img src="https://img.shields.io/badge/MCP-Compliant-brightgreen?style=for-the-badge" alt="MCP Compliant">
+  <img src="https://img.shields.io/badge/Python-3.12+-blue?style=for-the-badge&logo=python" alt="Python Version">
+  <img src="https://img.shields.io/badge/Database-SQLite--vec-orange?style=for-the-badge&logo=sqlite" alt="Database">
+  <img src="https://img.shields.io/badge/License-MIT-yellow?style=for-the-badge" alt="License">
+</p>
 
 **Local-first persistent memory MCP server for AI agents.**
 Hybrid search (vector + FTS5) in a single SQLite database, cross-session recall via MCP tools.
@@ -30,19 +42,24 @@ cp .env.example .env             # configure your LLM endpoint
 python -m memorymesh             # start standalone MCP server
 ```
 
-> **Note:** On the very first run, MemoryMesh will automatically download the `sentence-transformers` embedding model (~100–300 MB) to your local cache. This may take 1–2 minutes depending on your network connection.
+> [!NOTE]
+> On the very first run, MemoryMesh will automatically download the `sentence-transformers` embedding model (~100–300 MB) to your local cache. This may take 1–2 minutes depending on your network connection.
 
 ## Architecture
 
-```
-User -> Any MCP Client -> LLM (via your router)
-                           |
-                           +-> recall(query)  -> MemoryMesh MCP Server
-                           |                      +-> sqlite-vec (vector ANN)
-                           |                      +-> FTS5 (keyword)
-                           |                      +-> RRF fusion
-                           |
-                           +-> save_context_pair -> atomic fact extraction
+```mermaid
+graph TD
+    User([User / Client]) --> Client[Any MCP Client]
+    Client --> LLM[LLM via Router]
+    
+    subgraph MemoryMesh [MemoryMesh MCP Server]
+        MM[Core Engine] -->|1. Semantic| SV[(sqlite-vec ANN)]
+        MM -->|2. Keyword| FTS[(FTS5 Search)]
+        MM -->|3. Fuse| RRF[RRF Fusion Ranker]
+    end
+
+    LLM -->|recall| MM
+    LLM -->|save_context_pair| FE[Atomic Fact Extraction]
 ```
 
 **Key design:**
@@ -51,7 +68,7 @@ User -> Any MCP Client -> LLM (via your router)
 - Background tasks (enrichment, consolidation, fact extraction) are rate-limited
 - Session-level memories auto-expire after 7 days
 
-### 🌟 Hidden Gems (Under the Hood)
+### Hidden Gems (Under the Hood)
 MemoryMesh is packed with subtle architectural decisions designed to make the AI feel more like a human colleague:
 - **Zero-Latency Context (Optimistic Hydration):** Instead of making you wait for vector searches when you reopen an old project, MemoryMesh pre-computes semantic anchors right before a session closes. These are stored in a RAM Cache, meaning the AI regains full context of your last session in `<5ms`—before you even finish typing your first prompt.
 - **Cross-Project Wisdom (Soft Penalty):** MemoryMesh doesn't use hard boundaries between projects. It uses a *Soft Penalty* system. If you solve a complex Docker bug in `Project A` and later ask a Docker question in `Project B`, MemoryMesh slightly penalizes `Project A`'s memories but still surfaces them if they are highly relevant. The AI learns globally but prioritizes locally.
@@ -67,8 +84,8 @@ MemoryMesh uses **two independent LLM layers** to separate interactive performan
 
 | Layer | Variable | Typical Models | Purpose |
 |-------|----------|----------------|---------|
-| **Foreground (Chat)** | `DEFAULT_MODEL` / `FALLBACK_MODEL` | GPT-5.5, Claude 4.7 Opus, Gemini 3.5 Flash, DeepSeek V4-Pro | Direct user interaction via the MCP client |
-| **Background (Data)** | `BACKGROUND_MODEL_POOL` | Gemini 2.5 Flash, Llama 3.1 8B, DeepSeek V4 Flash | Bootstrap snapshots, atomic fact extraction, session compaction |
+| <img src="https://raw.githubusercontent.com/lucide-icons/lucide/main/icons/message-circle.svg" width="16" height="16" style="vertical-align: middle;"> **Foreground (Chat)** | `DEFAULT_MODEL` / `FALLBACK_MODEL` | GPT-5.5, Claude 4.7 Opus, Gemini 3.5 Flash, DeepSeek V4-Pro | Direct user interaction via the MCP client |
+| <img src="https://raw.githubusercontent.com/lucide-icons/lucide/main/icons/cpu.svg" width="16" height="16" style="vertical-align: middle;"> **Background (Data)** | `BACKGROUND_MODEL_POOL` | Gemini 2.5 Flash, Llama 3.1 8B, DeepSeek V4 Flash | Bootstrap snapshots, atomic fact extraction, session compaction |
 
 ## Multi-Agent & Cross-Device Sync
 MemoryMesh is designed with a future-proof architecture that revolves around the `DEFAULT_USER_ID` environment variable. This unlocks powerful real-world workflows:
@@ -148,21 +165,21 @@ docker compose -f docker/docker-compose.yml up -d
 
 | Tool | Purpose |
 |------|---------|
-| `remember` | Save a memory with content, tags, importance |
-| `recall` | Retrieve top relevant memories by semantic query |
-| `forget` | Soft-delete (archive) a memory |
-| `archive_memory` | Move a memory to archive |
-| `unarchive_memory` | Restore an archived memory |
-| `list_memories` | List non-archived memories (paginated) |
-| `ping` | Health check: memory_count + fts_connected |
-| `save_system_prompt` | Save system prompt to current session |
-| `save_context_pair` | Save conversation exchange, trigger fact extraction |
-| `list_sessions` | List past sessions |
-| `get_session_context` | View session context log |
-| `new_session` | Create a fresh session (closes current) |
-| `end_session` | End session (compaction + buffer flush) |
-| `save_workspace_context` | Snapshot workspace state |
-| `resume_session` | Restore context from a past session |
+| <img src="https://raw.githubusercontent.com/lucide-icons/lucide/main/icons/brain.svg" width="16" height="16" style="vertical-align: middle;"> `remember` | Save a memory with content, tags, importance |
+| <img src="https://raw.githubusercontent.com/lucide-icons/lucide/main/icons/search.svg" width="16" height="16" style="vertical-align: middle;"> `recall` | Retrieve top relevant memories by semantic query |
+| <img src="https://raw.githubusercontent.com/lucide-icons/lucide/main/icons/trash-2.svg" width="16" height="16" style="vertical-align: middle;"> `forget` | Soft-delete (archive) a memory |
+| <img src="https://raw.githubusercontent.com/lucide-icons/lucide/main/icons/archive.svg" width="16" height="16" style="vertical-align: middle;"> `archive_memory` | Move a memory to archive |
+| <img src="https://raw.githubusercontent.com/lucide-icons/lucide/main/icons/archive-restore.svg" width="16" height="16" style="vertical-align: middle;"> `unarchive_memory` | Restore an archived memory |
+| <img src="https://raw.githubusercontent.com/lucide-icons/lucide/main/icons/list.svg" width="16" height="16" style="vertical-align: middle;"> `list_memories` | List non-archived memories (paginated) |
+| <img src="https://raw.githubusercontent.com/lucide-icons/lucide/main/icons/activity.svg" width="16" height="16" style="vertical-align: middle;"> `ping` | Health check: memory_count + fts_connected |
+| <img src="https://raw.githubusercontent.com/lucide-icons/lucide/main/icons/file-text.svg" width="16" height="16" style="vertical-align: middle;"> `save_system_prompt` | Save system prompt to current session |
+| <img src="https://raw.githubusercontent.com/lucide-icons/lucide/main/icons/message-square.svg" width="16" height="16" style="vertical-align: middle;"> `save_context_pair` | Save conversation exchange, trigger fact extraction |
+| <img src="https://raw.githubusercontent.com/lucide-icons/lucide/main/icons/clock.svg" width="16" height="16" style="vertical-align: middle;"> `list_sessions` | List past sessions |
+| <img src="https://raw.githubusercontent.com/lucide-icons/lucide/main/icons/eye.svg" width="16" height="16" style="vertical-align: middle;"> `get_session_context` | View session context log |
+| <img src="https://raw.githubusercontent.com/lucide-icons/lucide/main/icons/plus-circle.svg" width="16" height="16" style="vertical-align: middle;"> `new_session` | Create a fresh session (closes current) |
+| <img src="https://raw.githubusercontent.com/lucide-icons/lucide/main/icons/log-out.svg" width="16" height="16" style="vertical-align: middle;"> `end_session` | End session (compaction + buffer flush) |
+| <img src="https://raw.githubusercontent.com/lucide-icons/lucide/main/icons/camera.svg" width="16" height="16" style="vertical-align: middle;"> `save_workspace_context` | Snapshot workspace state |
+| <img src="https://raw.githubusercontent.com/lucide-icons/lucide/main/icons/refresh-cw.svg" width="16" height="16" style="vertical-align: middle;"> `resume_session` | Restore context from a past session |
 
 ## Development
 
@@ -197,6 +214,7 @@ tests/
 
 ## Security Notice
 
+> [!CAUTION]
 > **CRITICAL:** MemoryMesh is a local-first system. All conversation logs, project contexts, and extracted memories are stored as **plaintext** in SQLite databases (`./db/` and `.opencode/data/`).
 >
 > These database files may contain sensitive information including API keys, proprietary code snippets, or personal data discussed during sessions. **Never commit these database files to a public repository.**
