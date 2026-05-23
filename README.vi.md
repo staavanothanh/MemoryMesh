@@ -162,23 +162,23 @@ docker compose -f docker/docker-compose.yml up -d
 
 ## 15 Công cụ MCP
 
-| Công cụ | Mục đích |
-|---------|----------|
-| <img src="https://raw.githubusercontent.com/lucide-icons/lucide/main/icons/brain.svg" width="16" height="16" style="vertical-align: middle;"> `remember` | Lưu ký ức với nội dung, thẻ (tags), độ quan trọng |
-| <img src="https://raw.githubusercontent.com/lucide-icons/lucide/main/icons/search.svg" width="16" height="16" style="vertical-align: middle;"> `recall` | Truy xuất ký ức liên quan nhất theo truy vấn ngữ nghĩa |
-| <img src="https://raw.githubusercontent.com/lucide-icons/lucide/main/icons/trash-2.svg" width="16" height="16" style="vertical-align: middle;"> `forget` | Xóa mềm (lưu trữ) một ký ức |
-| <img src="https://raw.githubusercontent.com/lucide-icons/lucide/main/icons/archive.svg" width="16" height="16" style="vertical-align: middle;"> `archive_memory` | Di chuyển ký ức vào kho lưu trữ |
-| <img src="https://raw.githubusercontent.com/lucide-icons/lucide/main/icons/archive-restore.svg" width="16" height="16" style="vertical-align: middle;"> `unarchive_memory` | Khôi phục ký ức đã lưu trữ |
-| <img src="https://raw.githubusercontent.com/lucide-icons/lucide/main/icons/list.svg" width="16" height="16" style="vertical-align: middle;"> `list_memories` | Liệt kê ký ức chưa lưu trữ (phân trang) |
-| <img src="https://raw.githubusercontent.com/lucide-icons/lucide/main/icons/activity.svg" width="16" height="16" style="vertical-align: middle;"> `ping` | Kiểm tra sức khỏe: số lượng ký ức + kết nối FTS |
-| <img src="https://raw.githubusercontent.com/lucide-icons/lucide/main/icons/file-text.svg" width="16" height="16" style="vertical-align: middle;"> `save_system_prompt` | Lưu system prompt vào phiên hiện tại |
-| <img src="https://raw.githubusercontent.com/lucide-icons/lucide/main/icons/message-square.svg" width="16" height="16" style="vertical-align: middle;"> `save_context_pair` | Lưu trao đổi hội thoại, kích hoạt trích xuất sự kiện |
-| <img src="https://raw.githubusercontent.com/lucide-icons/lucide/main/icons/clock.svg" width="16" height="16" style="vertical-align: middle;"> `list_sessions` | Liệt kê các phiên trước đây |
-| <img src="https://raw.githubusercontent.com/lucide-icons/lucide/main/icons/eye.svg" width="16" height="16" style="vertical-align: middle;"> `get_session_context` | Xem nhật ký ngữ cảnh phiên |
-| <img src="https://raw.githubusercontent.com/lucide-icons/lucide/main/icons/plus-circle.svg" width="16" height="16" style="vertical-align: middle;"> `new_session` | Tạo phiên mới (đóng phiên hiện tại) |
-| <img src="https://raw.githubusercontent.com/lucide-icons/lucide/main/icons/log-out.svg" width="16" height="16" style="vertical-align: middle;"> `end_session` | Kết thúc phiên (nén + xả bộ đệm) |
-| <img src="https://raw.githubusercontent.com/lucide-icons/lucide/main/icons/camera.svg" width="16" height="16" style="vertical-align: middle;"> `save_workspace_context` | Chụp nhanh trạng thái workspace |
-| <img src="https://raw.githubusercontent.com/lucide-icons/lucide/main/icons/refresh-cw.svg" width="16" height="16" style="vertical-align: middle;"> `resume_session` | Khôi phục ngữ cảnh từ phiên trước |
+| Công cụ | Phân loại Kiến trúc | Mục đích |
+|---------|---------------------|----------|
+| ![Core](https://img.shields.io/badge/-CORE-00f2fe?style=flat-square) `remember` | Ngữ nghĩa / Vector | Lưu ký ức với nội dung, thẻ (tags), độ quan trọng |
+| ![Core](https://img.shields.io/badge/-CORE-00f2fe?style=flat-square) `recall` | Hợp nhất RRF | Truy xuất ký ức liên quan nhất theo truy vấn ngữ nghĩa |
+| ![Core](https://img.shields.io/badge/-CORE-00f2fe?style=flat-square) `save_context_pair` | Trích xuất Sự kiện | Lưu trao đổi hội thoại, kích hoạt trích xuất sự kiện |
+| ![Data](https://img.shields.io/badge/-DATA-9d4edd?style=flat-square) `forget` | SQLite Bền vững | Xóa mềm (lưu trữ) một ký ức |
+| ![Data](https://img.shields.io/badge/-DATA-9d4edd?style=flat-square) `archive_memory` | SQLite Bền vững | Di chuyển ký ức vào kho lưu trữ |
+| ![Data](https://img.shields.io/badge/-DATA-9d4edd?style=flat-square) `unarchive_memory` | SQLite Bền vững | Khôi phục ký ức đã lưu trữ |
+| ![Data](https://img.shields.io/badge/-DATA-9d4edd?style=flat-square) `list_memories` | SQLite Bền vững | Liệt kê ký ức chưa lưu trữ (phân trang) |
+| ![Data](https://img.shields.io/badge/-DATA-9d4edd?style=flat-square) `save_workspace_context` | SQLite Bền vững | Chụp nhanh trạng thái workspace |
+| ![Session](https://img.shields.io/badge/-SESSION-00ff66?style=flat-square) `new_session` | Vòng đời Phiên | Tạo phiên mới (đóng phiên hiện tại) |
+| ![Session](https://img.shields.io/badge/-SESSION-00ff66?style=flat-square) `resume_session` | Vòng đời Phiên | Khôi phục ngữ cảnh từ phiên trước |
+| ![Session](https://img.shields.io/badge/-SESSION-00ff66?style=flat-square) `save_system_prompt` | Vòng đời Phiên | Lưu system prompt vào phiên hiện tại |
+| ![Session](https://img.shields.io/badge/-SESSION-00ff66?style=flat-square) `list_sessions` | Vòng đời Phiên | Liệt kê các phiên trước đây |
+| ![Session](https://img.shields.io/badge/-SESSION-00ff66?style=flat-square) `get_session_context` | Vòng đời Phiên | Xem nhật ký ngữ cảnh phiên |
+| ![Session](https://img.shields.io/badge/-SESSION-00ff66?style=flat-square) `end_session` | Vòng đời Phiên | Kết thúc phiên (nén + xả bộ đệm) |
+| ![Diag](https://img.shields.io/badge/-DIAG-6c757d?style=flat-square) `ping` | Tiện ích Hệ thống | Kiểm tra sức khỏe: số lượng ký ức + kết nối FTS |
 
 ## Phát triển
 

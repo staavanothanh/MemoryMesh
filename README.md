@@ -163,23 +163,23 @@ docker compose -f docker/docker-compose.yml up -d
 
 ## 15 MCP Tools
 
-| Tool | Purpose |
-|------|---------|
-| <img src="https://raw.githubusercontent.com/lucide-icons/lucide/main/icons/brain.svg" width="16" height="16" style="vertical-align: middle;"> `remember` | Save a memory with content, tags, importance |
-| <img src="https://raw.githubusercontent.com/lucide-icons/lucide/main/icons/search.svg" width="16" height="16" style="vertical-align: middle;"> `recall` | Retrieve top relevant memories by semantic query |
-| <img src="https://raw.githubusercontent.com/lucide-icons/lucide/main/icons/trash-2.svg" width="16" height="16" style="vertical-align: middle;"> `forget` | Soft-delete (archive) a memory |
-| <img src="https://raw.githubusercontent.com/lucide-icons/lucide/main/icons/archive.svg" width="16" height="16" style="vertical-align: middle;"> `archive_memory` | Move a memory to archive |
-| <img src="https://raw.githubusercontent.com/lucide-icons/lucide/main/icons/archive-restore.svg" width="16" height="16" style="vertical-align: middle;"> `unarchive_memory` | Restore an archived memory |
-| <img src="https://raw.githubusercontent.com/lucide-icons/lucide/main/icons/list.svg" width="16" height="16" style="vertical-align: middle;"> `list_memories` | List non-archived memories (paginated) |
-| <img src="https://raw.githubusercontent.com/lucide-icons/lucide/main/icons/activity.svg" width="16" height="16" style="vertical-align: middle;"> `ping` | Health check: memory_count + fts_connected |
-| <img src="https://raw.githubusercontent.com/lucide-icons/lucide/main/icons/file-text.svg" width="16" height="16" style="vertical-align: middle;"> `save_system_prompt` | Save system prompt to current session |
-| <img src="https://raw.githubusercontent.com/lucide-icons/lucide/main/icons/message-square.svg" width="16" height="16" style="vertical-align: middle;"> `save_context_pair` | Save conversation exchange, trigger fact extraction |
-| <img src="https://raw.githubusercontent.com/lucide-icons/lucide/main/icons/clock.svg" width="16" height="16" style="vertical-align: middle;"> `list_sessions` | List past sessions |
-| <img src="https://raw.githubusercontent.com/lucide-icons/lucide/main/icons/eye.svg" width="16" height="16" style="vertical-align: middle;"> `get_session_context` | View session context log |
-| <img src="https://raw.githubusercontent.com/lucide-icons/lucide/main/icons/plus-circle.svg" width="16" height="16" style="vertical-align: middle;"> `new_session` | Create a fresh session (closes current) |
-| <img src="https://raw.githubusercontent.com/lucide-icons/lucide/main/icons/log-out.svg" width="16" height="16" style="vertical-align: middle;"> `end_session` | End session (compaction + buffer flush) |
-| <img src="https://raw.githubusercontent.com/lucide-icons/lucide/main/icons/camera.svg" width="16" height="16" style="vertical-align: middle;"> `save_workspace_context` | Snapshot workspace state |
-| <img src="https://raw.githubusercontent.com/lucide-icons/lucide/main/icons/refresh-cw.svg" width="16" height="16" style="vertical-align: middle;"> `resume_session` | Restore context from a past session |
+| Tool | Architecture Category | Purpose |
+|------|----------------------|---------|
+| ![Core](https://img.shields.io/badge/-CORE-00f2fe?style=flat-square) `remember` | Semantic / Vector | Save a memory with content, tags, importance |
+| ![Core](https://img.shields.io/badge/-CORE-00f2fe?style=flat-square) `recall` | Hybrid RRF Fusion | Retrieve top relevant memories by semantic query |
+| ![Core](https://img.shields.io/badge/-CORE-00f2fe?style=flat-square) `save_context_pair` | Atomic Fact Extraction | Save conversation exchange, trigger fact extraction |
+| ![Data](https://img.shields.io/badge/-DATA-9d4edd?style=flat-square) `forget` | SQLite Persistent | Soft-delete (archive) a memory |
+| ![Data](https://img.shields.io/badge/-DATA-9d4edd?style=flat-square) `archive_memory` | SQLite Persistent | Move a memory to archive |
+| ![Data](https://img.shields.io/badge/-DATA-9d4edd?style=flat-square) `unarchive_memory` | SQLite Persistent | Restore an archived memory |
+| ![Data](https://img.shields.io/badge/-DATA-9d4edd?style=flat-square) `list_memories` | SQLite Persistent | List non-archived memories (paginated) |
+| ![Data](https://img.shields.io/badge/-DATA-9d4edd?style=flat-square) `save_workspace_context` | SQLite Persistent | Snapshot workspace state |
+| ![Session](https://img.shields.io/badge/-SESSION-00ff66?style=flat-square) `new_session` | Session Lifecycle | Create a fresh session (closes current) |
+| ![Session](https://img.shields.io/badge/-SESSION-00ff66?style=flat-square) `resume_session` | Session Lifecycle | Restore context from a past session |
+| ![Session](https://img.shields.io/badge/-SESSION-00ff66?style=flat-square) `save_system_prompt` | Session Lifecycle | Save system prompt to current session |
+| ![Session](https://img.shields.io/badge/-SESSION-00ff66?style=flat-square) `list_sessions` | Session Lifecycle | List past sessions |
+| ![Session](https://img.shields.io/badge/-SESSION-00ff66?style=flat-square) `get_session_context` | Session Lifecycle | View session context log |
+| ![Session](https://img.shields.io/badge/-SESSION-00ff66?style=flat-square) `end_session` | Session Lifecycle | End session (compaction + buffer flush) |
+| ![Diag](https://img.shields.io/badge/-DIAG-6c757d?style=flat-square) `ping` | System Utility | Health check: memory_count + fts_connected |
 
 ## Development
 
