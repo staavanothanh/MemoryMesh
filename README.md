@@ -84,8 +84,8 @@ MemoryMesh uses **two independent LLM layers** to separate interactive performan
 
 | Layer | Variable | Typical Models | Purpose |
 |-------|----------|----------------|---------|
-| <img src="https://raw.githubusercontent.com/lucide-icons/lucide/main/icons/message-circle.svg" width="16" height="16" style="vertical-align: middle;"> **Foreground (Chat)** | `DEFAULT_MODEL` / `FALLBACK_MODEL` | GPT-5.5, Claude 4.7 Opus, Gemini 3.5 Flash, DeepSeek V4-Pro | Direct user interaction via the MCP client |
-| <img src="https://raw.githubusercontent.com/lucide-icons/lucide/main/icons/cpu.svg" width="16" height="16" style="vertical-align: middle;"> **Background (Data)** | `BACKGROUND_MODEL_POOL` | Gemini 2.5 Flash, Llama 3.1 8B, DeepSeek V4 Flash | Bootstrap snapshots, atomic fact extraction, session compaction |
+| **Foreground (Chat)** | `DEFAULT_MODEL` / `FALLBACK_MODEL` | GPT-5.5, Claude 4.7 Opus, Gemini 3.5 Flash, DeepSeek V4-Pro | Direct user interaction via the MCP client |
+| **Background (Data)** | `BACKGROUND_MODEL_POOL` | Gemini 2.5 Flash, Llama 3.1 8B, DeepSeek V4 Flash | Bootstrap snapshots, atomic fact extraction, session compaction |
 
 ## Multi-Agent & Cross-Device Sync
 MemoryMesh is designed with a future-proof architecture that revolves around the `DEFAULT_USER_ID` environment variable. This unlocks powerful real-world workflows:

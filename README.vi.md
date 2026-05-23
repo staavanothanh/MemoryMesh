@@ -86,8 +86,8 @@ MemoryMesh sử dụng **hai tầng LLM độc lập** để tách biệt hiệu
 
 | Tầng | Biến môi trường | Model điển hình | Mục đích |
 |------|-----------------|-----------------|----------|
-| <img src="https://raw.githubusercontent.com/lucide-icons/lucide/main/icons/message-circle.svg" width="16" height="16" style="vertical-align: middle;"> **Foreground (Chat)** | `DEFAULT_MODEL` / `FALLBACK_MODEL` | GPT-5.5, Claude 4.7 Opus, Gemini 3.5 Flash, DeepSeek V4-Pro | Tương tác trực tiếp với người dùng qua MCP client |
-| <img src="https://raw.githubusercontent.com/lucide-icons/lucide/main/icons/cpu.svg" width="16" height="16" style="vertical-align: middle;"> **Background (Dữ liệu)** | `BACKGROUND_MODEL_POOL` | Gemini 2.5 Flash, Llama 3.1 8B, DeepSeek V4 Flash | Snapshot bootstrap, trích xuất sự kiện nguyên tử, nén phiên |
+| **Foreground (Chat)** | `DEFAULT_MODEL` / `FALLBACK_MODEL` | GPT-5.5, Claude 4.7 Opus, Gemini 3.5 Flash, DeepSeek V4-Pro | Tương tác trực tiếp với người dùng qua MCP client |
+| **Background (Dữ liệu)** | `BACKGROUND_MODEL_POOL` | Gemini 2.5 Flash, Llama 3.1 8B, DeepSeek V4 Flash | Snapshot bootstrap, trích xuất sự kiện nguyên tử, nén phiên |
 
 ### Cách hoạt động
 - **Model chat chính** xử lý mọi suy luận hướng đến người dùng — chọn model tốt nhất bạn có thể chi trả.
