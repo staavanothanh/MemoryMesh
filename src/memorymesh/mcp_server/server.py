@@ -165,10 +165,10 @@ class MemoryMeshServer:
                 # Use wait_for to prevent infinite hangs during forceful exits
                 await asyncio.wait_for(
                     self.handlers._finalize_session(current_id, uid),
-                    timeout=5.0
+                    timeout=30.0
                 )
         except asyncio.TimeoutError:
-            logger.warning("Shutdown finalization timed out")
+            logger.warning("Shutdown finalization timed out (30s)")
         except Exception as e:
             logger.warning("Shutdown finalization failed: %s", e)
             
@@ -266,10 +266,10 @@ class MemoryMeshServer:
                 uid = self.config.default_user_id
                 await asyncio.wait_for(
                     self.handlers._finalize_session(current_id, uid),
-                    timeout=5.0,
+                    timeout=30.0,
                 )
         except asyncio.TimeoutError:
-            logger.warning("Shutdown finalization timed out (5s), force closing...")
+            logger.warning("Shutdown finalization timed out (30s), force closing...")
         except Exception as e:
             logger.warning("Shutdown finalization failed: %s", e)
         self._shutdown_event.set()
