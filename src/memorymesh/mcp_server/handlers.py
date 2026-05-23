@@ -9,7 +9,7 @@ from ..memory.fact_extractor import FactExtractor
 from ..scanner import CodebaseScanner
 from ..errors import MemoryMeshError
 from ..utils.json_parser import clean_and_parse_llm_json
-from ..prompts import RECALL_INSTRUCTION, SAVE_CONTEXT_INSTRUCTION, SESSION_COMPACT_PROMPT, BOOTSTRAP_SNAPSHOT_PROMPT
+from ..prompts import RECALL_INSTRUCTION, SAVE_CONTEXT_INSTRUCTION, PERMANENT_LOG_DIRECTIVE, SESSION_COMPACT_PROMPT, BOOTSTRAP_SNAPSHOT_PROMPT
 
 _MAGENTA = "\033[1;35m"
 _CYAN = "\033[1;36m"
@@ -553,6 +553,8 @@ class ToolHandlers:
             system_prompt = args["system_prompt"]
             if RECALL_INSTRUCTION not in system_prompt:
                 system_prompt = f"{system_prompt}\n\n{RECALL_INSTRUCTION}"
+            if PERMANENT_LOG_DIRECTIVE not in system_prompt:
+                system_prompt = f"{system_prompt}\n\n{PERMANENT_LOG_DIRECTIVE}"
             await self.session_store.update_system_prompt(self._current_session_id, system_prompt)
             memory_id = await self.manager.add_memory(
                 text=f"[System Prompt] {system_prompt}",
@@ -753,6 +755,9 @@ class ToolHandlers:
         try:
             user_id = args.get("user_id", self.manager.config.default_user_id)
             system_prompt = args.get("system_prompt", "")
+            # Inject permanent log directive into system prompt
+            if PERMANENT_LOG_DIRECTIVE not in system_prompt:
+                system_prompt = f"{system_prompt}\n\n{PERMANENT_LOG_DIRECTIVE}"
             workspace_path = args.get("workspace_path", "")
             if self._current_session_id:
                 await self._finalize_session(self._current_session_id, user_id)
@@ -827,6 +832,7 @@ class ToolHandlers:
                 "project_context": project_context or "MemoryMesh MCP server — memory mesh system",
                 "recall_instruction": RECALL_INSTRUCTION,
                 "save_instruction": SAVE_CONTEXT_INSTRUCTION,
+                "permanent_log_directive": PERMANENT_LOG_DIRECTIVE,
             }
 
             asyncio.create_task(self._auto_scan_codebase(workspace_path, user_id))
