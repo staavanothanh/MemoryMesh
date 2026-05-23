@@ -28,6 +28,16 @@ class SqliteVecConfig:
 
 # Deprecated — kept for migration script only
 @dataclass
+class SessionStartConfig:
+    instruction_file_priority: Optional[list] = None
+    instructions_dir: str = ".memorymesh/instructions/"
+    global_instruction_file: str = ""
+    docs_sync_enabled: bool = True
+    docs_sync_files: Optional[list] = None
+    max_file_size: int = 51200
+
+
+@dataclass
 class SessionConfig:
     db_path: str = "./db/sessions.db"
     auto_create_session: bool = True
@@ -38,6 +48,7 @@ class SessionConfig:
     compact_threshold: int = 20
     max_context_log: int = 500
     stale_session_minutes: int = 30
+    session_start: SessionStartConfig = field(default_factory=SessionStartConfig)
 
     def validate(self):
         import os
@@ -96,6 +107,10 @@ class AppConfig:
     @staticmethod
     def from_env() -> "AppConfig":
         load_dotenv(".env")
+
+        instruction_files_env = os.getenv("SESSION_INSTRUCTION_FILES")
+        docs_files_env = os.getenv("SESSION_DOCS_SYNC_FILES")
+
         return AppConfig(
             router=RouterConfig(
                 url=os.getenv("ROUTER_URL", "http://127.0.0.1:20128/v1"),
@@ -119,6 +134,14 @@ class AppConfig:
                 compact_threshold=int(os.getenv("SESSION_COMPACT_THRESHOLD", "20")),
                 max_context_log=int(os.getenv("SESSION_MAX_CONTEXT_LOG", "500")),
                 stale_session_minutes=int(os.getenv("SESSION_STALE_MINUTES", "30")),
+                session_start=SessionStartConfig(
+                    instruction_file_priority=instruction_files_env.split(",") if instruction_files_env else None,
+                    instructions_dir=os.getenv("SESSION_INSTRUCTIONS_DIR", ".memorymesh/instructions/"),
+                    global_instruction_file=os.getenv("SESSION_GLOBAL_INSTRUCTION", ""),
+                    docs_sync_enabled=os.getenv("SESSION_DOCS_SYNC_ENABLED", "true").lower() == "true",
+                    docs_sync_files=docs_files_env.split(",") if docs_files_env else None,
+                    max_file_size=int(os.getenv("SESSION_INSTRUCTION_MAX_FILE_SIZE", "51200")),
+                ),
             ),
             instinct=InstinctConfig(
                 db_path=os.getenv("INSTINCT_DB_PATH", "./db/instincts.db"),

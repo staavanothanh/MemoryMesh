@@ -1,6 +1,7 @@
 import json
 import asyncio
 import time
+import os
 import logging
 from typing import Optional, List
 from ..hooks import hooks as global_hooks
@@ -10,7 +11,12 @@ from ..memory.fact_extractor import FactExtractor
 from ..scanner import CodebaseScanner
 from ..errors import MemoryMeshError
 from ..utils.json_parser import clean_and_parse_llm_json
-from ..prompts import RECALL_INSTRUCTION, SAVE_CONTEXT_INSTRUCTION, PERMANENT_LOG_DIRECTIVE, BOOTSTRAP_SNAPSHOT_PROMPT
+from ..prompts import COMBINED_AGENT_INSTRUCTION, PERMANENT_LOG_DIRECTIVE, BOOTSTRAP_SNAPSHOT_PROMPT
+
+_ERROR_PRESERVE_KEYWORDS = frozenset({
+    "fix", "bug", "error", "crash", "failure", "fail", "hotfix", "patch",
+    "workaround", "root cause", "lỗi", "sửa", "debug",
+})
 
 _MAGENTA = "\033[1;35m"
 _CYAN = "\033[1;36m"
@@ -39,6 +45,7 @@ class ToolHandlers:
         self._current_session_id: str = ""
         self._cached_workspace = None
         self._exchange_unsaved: bool = False
+        self._reminder_count: int = 3
         self._fact_extractor = FactExtractor(manager.config, manager.router)
         self._fact_batch_buffer: list[str] = []
         self._fact_batch_lock = asyncio.Lock()
@@ -52,6 +59,12 @@ class ToolHandlers:
 
     async def get_current_session_id(self) -> str:
         return self._current_session_id
+
+    def consume_reminder(self) -> str:
+        if self._reminder_count > 0:
+            self._reminder_count -= 1
+            return "⚠️ Then call save_context_pair(user_msg, asst_msg)\n"
+        return ""
 
     async def _get_workspace_path(self) -> str:
         if self._cached_workspace is None and self._current_session_id:
@@ -293,22 +306,20 @@ class ToolHandlers:
             logger.warning("Batch fact extraction failed: %s", e)
 
     async def _finalize_session(self, session_id: str, user_id: str):
-        """Core lifecycle: bootstrap + mark ended.
+        """Core lifecycle: mark ended + bootstrap.
 
         Idempotent — safe to call multiple times. Each sub-step has its own
         error handling so a single failure doesn't block the rest.
         """
         try:
             _log_bg("Finalize", f"Finalizing session {session_id[:12]}...", emoji="")
+            await self.session_store.end_session(session_id)
             snapshot_text = await self._create_bootstrap_snapshot(session_id, user_id)
             wp = await self._get_workspace_path()
             cache_key = f"{user_id}:{wp}" if wp else user_id
             if snapshot_text:
                 self._global_bootstrap_ram_cache[cache_key] = snapshot_text
-
-            # Pre-warm search cache + flush fact buffer — fire-and-forget
             asyncio.create_task(self._prewarm_and_flush(cache_key, user_id, wp))
-            await self.session_store.end_session(session_id)
             _log_bg("Finalize", f"Session {session_id[:12]} finalized", emoji="")
         except Exception as e:
             logger.error("Session finalization failed for %s: %s", session_id, e)
@@ -359,12 +370,19 @@ class ToolHandlers:
 
     async def handle_remember(self, args: dict) -> dict:
         wp = await self._get_workspace_path()
+        level = args.get("level", "user")
+        importance = args.get("importance", 3)
+        content = args["content"]
+        if level == "session" and (
+            importance >= 4 or any(kw in content.lower() for kw in _ERROR_PRESERVE_KEYWORDS)
+        ):
+            level = "knowledge"
         try:
             memory_id = await self.manager.add_memory(
-                text=args["content"],
+                text=content,
                 tags=args.get("tags"),
-                importance=args.get("importance", 3),
-                level=args.get("level", "user"),
+                importance=importance,
+                level=level,
                 user_id=args.get("user_id"),
                 workspace_path=wp if wp else args.get("workspace_path"),
             )
@@ -508,8 +526,8 @@ class ToolHandlers:
         try:
             user_id = args.get("user_id", self.manager.config.default_user_id)
             system_prompt = args["system_prompt"]
-            if RECALL_INSTRUCTION not in system_prompt:
-                system_prompt = f"{system_prompt}\n\n{RECALL_INSTRUCTION}"
+            if COMBINED_AGENT_INSTRUCTION not in system_prompt:
+                system_prompt = f"{system_prompt}\n\n{COMBINED_AGENT_INSTRUCTION}"
             if PERMANENT_LOG_DIRECTIVE not in system_prompt:
                 system_prompt = f"{system_prompt}\n\n{PERMANENT_LOG_DIRECTIVE}"
             await self.session_store.update_system_prompt(self._current_session_id, system_prompt)
@@ -521,7 +539,7 @@ class ToolHandlers:
                 user_id=user_id,
                 workspace_path=await self._get_workspace_path(),
             )
-            return {"status": "success", "data": {"session_id": self._current_session_id, "memory_id": memory_id, "recall_instruction": RECALL_INSTRUCTION}}
+            return {"status": "success", "data": {"session_id": self._current_session_id, "memory_id": memory_id, "recall_instruction": COMBINED_AGENT_INSTRUCTION}}
         except MemoryMeshError as e:
             logger.error("Save system prompt failed: %s", e)
             return {"status": "error", "error": str(e)}
@@ -708,16 +726,141 @@ class ToolHandlers:
             logger.warning("Layer 3 bootstrap search failed: %s", e)
             return None
 
+    async def _load_session_instructions(self, workspace_path: str) -> str:
+        cfg = self.manager.config.session.session_start
+        if not workspace_path or not os.path.isdir(workspace_path):
+            return ""
+
+        loop = asyncio.get_event_loop()
+        file_priority = cfg.instruction_file_priority or [
+            "opencode.md", "CLAUDE.md", ".cursorrules", ".windsurfrules",
+            "memorymesh.md", ".memorymesh.md",
+        ]
+
+        async def _read(path: str) -> str:
+            try:
+                if not os.path.isfile(path):
+                    return ""
+                size = os.path.getsize(path)
+                if size > cfg.max_file_size:
+                    _log_bg("SessionStart", f"Skipped {os.path.basename(path)} ({size}B exceeds {cfg.max_file_size}B)", emoji="")
+                    return ""
+                return await loop.run_in_executor(
+                    None, lambda: _read_sync(path)
+                )
+            except Exception:
+                return ""
+
+        def _read_sync(path: str) -> str:
+            with open(path, "r", encoding="utf-8", errors="replace") as f:
+                return f.read().strip()
+
+        parts = []
+
+        # Tier 1: Global user-level file
+        if cfg.global_instruction_file:
+            gpath = os.path.expanduser(cfg.global_instruction_file)
+            content = await _read(gpath)
+            if content:
+                parts.append(f"# Global Instructions\n{content}")
+
+        # Tier 2: Instructions directory (all .md/.txt files, sorted)
+        dir_path = os.path.join(workspace_path, cfg.instructions_dir)
+        if os.path.isdir(dir_path):
+            try:
+                fnames = sorted(
+                    f for f in os.listdir(dir_path)
+                    if f.endswith(('.md', '.txt')) and os.path.isfile(os.path.join(dir_path, f))
+                )
+                for fname in fnames:
+                    content = await _read(os.path.join(dir_path, fname))
+                    if content:
+                        parts.append(content)
+            except Exception as e:
+                logger.debug("Instructions dir scan failed: %s", e)
+
+        # Tier 3: Auto-detect CLI/IDE files (first match wins)
+        for fname in file_priority:
+            fpath = os.path.join(workspace_path, fname)
+            content = await _read(fpath)
+            if content:
+                parts.append(f"# From {fname}\n{content}")
+                break
+
+        result = "\n\n".join(parts) if parts else ""
+        if result:
+            _log_bg("SessionStart", f"Loaded {len(parts)} instruction source(s)", emoji="")
+        return result
+
+    async def _sync_docs_files(self, workspace_path: str, user_id: str):
+        cfg = self.manager.config.session.session_start
+        if not cfg.docs_sync_enabled or not workspace_path or not os.path.isdir(workspace_path):
+            return
+
+        loop = asyncio.get_event_loop()
+        docs_files = cfg.docs_sync_files or ["README.md", "CONTRIBUTING.md", "CHANGELOG.md", "Makefile"]
+
+        async def _read_doc(path: str) -> Optional[tuple]:
+            try:
+                if not os.path.isfile(path):
+                    return None
+                size = os.path.getsize(path)
+                if size > cfg.max_file_size:
+                    return None
+                content = await loop.run_in_executor(
+                    None, lambda: _read_doc_sync(path)
+                )
+                if not content:
+                    return None
+                return (os.path.basename(path), content)
+            except Exception:
+                return None
+
+        def _read_doc_sync(path: str) -> str:
+            with open(path, "r", encoding="utf-8", errors="replace") as f:
+                return f.read().strip()[:2000]
+
+        saved = 0
+        for fname in docs_files:
+            doc = await _read_doc(os.path.join(workspace_path, fname))
+            if doc:
+                name, content = doc
+                try:
+                    await self.manager.add_memory(
+                        text=f"[Docs: {name}]\n{content}",
+                        tags=["docs", "project_docs", f"doc:{name.lower()}"],
+                        importance=4,
+                        level="session",
+                        user_id=user_id,
+                        workspace_path=workspace_path,
+                    )
+                    saved += 1
+                except Exception as e:
+                    logger.debug("Doc sync failed for %s: %s", name, e)
+
+        if saved:
+            _log_bg("SessionStart", f"Synced {saved} doc file(s)", emoji="")
+
     async def handle_new_session(self, args: dict) -> dict:
         try:
             user_id = args.get("user_id", self.manager.config.default_user_id)
             system_prompt = args.get("system_prompt", "")
-            # Inject permanent log directive into system prompt
+
+            # Load session instructions from files (prepend to system prompt)
+            workspace_path = args.get("workspace_path", "")
+            instructions = await self._load_session_instructions(workspace_path)
+            if instructions:
+                system_prompt = f"{instructions}\n\n{system_prompt}"
+
+            # Inject mandatory directives into system prompt
+            if COMBINED_AGENT_INSTRUCTION not in system_prompt:
+                system_prompt = f"{system_prompt}\n\n{COMBINED_AGENT_INSTRUCTION}"
             if PERMANENT_LOG_DIRECTIVE not in system_prompt:
                 system_prompt = f"{system_prompt}\n\n{PERMANENT_LOG_DIRECTIVE}"
-            workspace_path = args.get("workspace_path", "")
             if self._current_session_id:
-                await self._finalize_session(self._current_session_id, user_id)
+                prev_sid = self._current_session_id
+                self._current_session_id = ""
+                asyncio.create_task(self._finalize_session(prev_sid, user_id))
             session_id = await self.session_store.create_session(
                 user_id=user_id,
                 system_prompt=system_prompt,
@@ -792,8 +935,8 @@ class ToolHandlers:
                 "memory_id": memory_id,
                 "message": "New session created",
                 "project_context": project_context or "MemoryMesh MCP server — memory mesh system",
-                "recall_instruction": RECALL_INSTRUCTION,
-                "save_instruction": SAVE_CONTEXT_INSTRUCTION,
+                "recall_instruction": COMBINED_AGENT_INSTRUCTION,
+                "save_instruction": COMBINED_AGENT_INSTRUCTION,
                 "permanent_log_directive": PERMANENT_LOG_DIRECTIVE,
                 "tool_registry_reminder": (
                     "MANDATORY: Re-read all tool descriptions (Fat Description) "
@@ -803,6 +946,7 @@ class ToolHandlers:
             }
 
             asyncio.create_task(self._auto_scan_codebase(workspace_path, user_id))
+            asyncio.create_task(self._sync_docs_files(workspace_path, user_id))
             await self._log_context("assistant", f"New session created: {session_id}", "new_session", str(args))
 
             return {"status": "success", "data": data}
@@ -829,6 +973,35 @@ class ToolHandlers:
             return {"status": "success", "data": {"session_id": session_id, "message": "Session ended"}}
         except MemoryMeshError as e:
             logger.error("End session failed: %s", e)
+            return {"status": "error", "error": str(e)}
+
+    async def handle_delete_session(self, args: dict) -> dict:
+        try:
+            session_id = args.get("session_id", self._current_session_id)
+            user_id = args.get("user_id", self.manager.config.default_user_id)
+            if not session_id:
+                return {"status": "error", "error": "No session specified"}
+            preserved = await self.manager.preserve_important_memories(session_id, user_id)
+            deleted = await self.manager.delete_memories_by_session(session_id, user_id)
+            await self.session_store.mark_deleted(session_id)
+            if session_id == self._current_session_id:
+                self._current_session_id = ""
+            await self._log_context("assistant", f"Session deleted: {session_id}", "delete_session", str(args))
+            return {"status": "success", "data": {"session_id": session_id, "preserved_count": preserved, "deleted_count": deleted, "message": "Session deleted"}}
+        except MemoryMeshError as e:
+            logger.error("Delete session failed: %s", e)
+            return {"status": "error", "error": str(e)}
+
+    async def handle_preserve_session_memories(self, args: dict) -> dict:
+        try:
+            session_id = args.get("session_id", self._current_session_id)
+            user_id = args.get("user_id", self.manager.config.default_user_id)
+            if not session_id:
+                return {"status": "error", "error": "No session specified"}
+            preserved = await self.manager.preserve_important_memories(session_id, user_id)
+            return {"status": "success", "data": {"session_id": session_id, "preserved_count": preserved, "message": f"Preserved {preserved} memories"}}
+        except MemoryMeshError as e:
+            logger.error("Preserve session memories failed: %s", e)
             return {"status": "error", "error": str(e)}
 
     async def handle_save_workspace_context(self, args: dict) -> dict:

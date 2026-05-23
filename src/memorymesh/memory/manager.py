@@ -540,6 +540,9 @@ class MemoryManager:
             "quyết định", "thiết kế", "next step", "tiếp theo",
             "refactor", "implement", "fix", "thay đổi",
             "milestone", "goal", "mục tiêu",
+            "bug", "error", "crash", "failure", "fail", "hotfix",
+            "patch", "workaround", "root cause", "debug",
+            "lỗi", "sửa",
         }
         preserved = 0
         for mem in memories:

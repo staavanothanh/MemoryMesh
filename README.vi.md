@@ -140,6 +140,12 @@ cp .env.example .env
 | `DEFAULT_USER_ID` | `your_user_id` | Người dùng mặc định |
 | `MCP_TRANSPORT` | `stdio` | `stdio` hoặc `sse` |
 | `MCP_PORT` | `8090` | Cổng SSE |
+| `SESSION_INSTRUCTION_FILES` | `opencode.md,CLAUDE.md,...` | Danh sách ưu tiên file hướng dẫn (cách nhau bằng dấu phẩy) tự động tải đầu mỗi phiên. File đầu tiên được tìm thấy sẽ được dùng. |
+| `SESSION_INSTRUCTIONS_DIR` | `.memorymesh/instructions/` | Thư mục chứa các file hướng dẫn (mọi file `.md`/`.txt` được gộp lại, sắp xếp theo thứ tự) |
+| `SESSION_GLOBAL_INSTRUCTION` | `""` | File hướng dẫn toàn cục cho người dùng (hỗ trợ `~` expansion) |
+| `SESSION_INSTRUCTION_MAX_FILE_SIZE` | `51200` | Kích thước file tối đa (bytes) cho file hướng dẫn/docs |
+| `SESSION_DOCS_SYNC_ENABLED` | `true` | Đặt thành `false` để tắt tự động đồng bộ tài liệu dự án vào bộ nhớ |
+| `SESSION_DOCS_SYNC_FILES` | `README.md,...` | Danh sách file tài liệu (cách nhau bằng dấu phẩy) được đồng bộ thành ký ức tham chiếu |
 
 ### Sử dụng với CLI Agent
 
@@ -154,6 +160,46 @@ MemoryMesh **Zero-Config cho AI Agent** — mọi hướng dẫn vận hành đ�
 | **Continue.dev** | Thêm MCP server trong `~/.continue/config.json` |
 | **Cline / Roo Code** | Thêm MCP server trong cài đặt extension VS Code |
 | **Mọi MCP client** | `python -m memorymesh` (stdio) hoặc `http://localhost:8090` (SSE) |
+
+## Hướng dẫn Khởi động Phiên (Session Start Instructions)
+
+MemoryMesh có thể tự động tải hướng dẫn và tài liệu vào đầu mỗi phiên làm việc — không cần nhắc thủ công. Tương thích với mọi quy ước CLI/IDE.
+
+### Cách hoạt động
+
+Khi `new_session()` được gọi, MemoryMesh quét nhiều nguồn theo thứ tự ưu tiên và **chèn nội dung vào đầu system prompt**, giúp model thấy hướng dẫn ngay từ lượt tương tác đầu tiên:
+
+```
+Tầng 1: File toàn cục của người dùng     ~/.config/memorymesh/session.md
+Tầng 2: Thư mục hướng dẫn                .memorymesh/instructions/ (mọi file .md/.txt, sắp xếp theo thứ tự)
+Tầng 3: File CLI/IDE cụ thể              opencode.md, CLAUDE.md, .cursorrules, ... (file đầu tiên được dùng)
+```
+
+### Nội dung file gợi ý
+
+Tạo một trong các file trên với nội dung như:
+
+```markdown
+# Quy tắc Phiên
+
+- **LUÔN LUÔN** gọi `save_context_pair(user_message, assistant_message)` ở cuối MỌI phản hồi
+- Hành động đầu tiên: gọi `new_session()` sau đó `recall(query="<chủ đề>")`
+- VI PHẠM save_context_pair = mất dữ liệu vĩnh viễn
+```
+
+### Đa người dùng & Đa thiết bị
+
+| Tình huống | Thiết lập |
+|------------|-----------|
+| **Một người dùng, một CLI** | Tạo `opencode.md` (hoặc `CLAUDE.md` / `.cursorrules`) trong thư mục dự án |
+| **Nhiều CLI trên cùng máy** | Tạo thư mục `.memorymesh/instructions/` — hoạt động với mọi CLI |
+| **Mọi dự án, cùng người dùng** | Đặt `SESSION_GLOBAL_INSTRUCTION=~/.config/memorymesh/session.md` |
+| **Mỗi dự án, quy tắc riêng** | Dùng `.memorymesh/instructions/` cho từng dự án |
+| **Không có file hướng dẫn** | MemoryMesh dùng chỉ thị tích hợp sẵn — không cần cấu hình gì thêm |
+
+### Đồng bộ Tài liệu (Docs Sync)
+
+Khi `SESSION_DOCS_SYNC_ENABLED=true` (mặc định), MemoryMesh cũng tự động đọc các file tài liệu của dự án (README.md, CONTRIBUTING.md, Makefile, ...) khi bắt đầu phiên và lưu chúng thành ký ức tham chiếu với thẻ `docs` và `project_docs`. Model có thể tìm thấy chúng qua `recall(query="docs")`.
 
 ### Docker
 

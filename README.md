@@ -141,6 +141,12 @@ cp .env.example .env
 | `DEFAULT_USER_ID` | `your_user_id` | Default user |
 | `MCP_TRANSPORT` | `stdio` | `stdio` or `sse` |
 | `MCP_PORT` | `8090` | SSE port |
+| `SESSION_INSTRUCTION_FILES` | `opencode.md,CLAUDE.md,...` | Comma-separated priority list of instruction files to auto-load at session start. First match wins. |
+| `SESSION_INSTRUCTIONS_DIR` | `.memorymesh/instructions/` | Directory for instruction fragments (all `.md`/`.txt` files merged, sorted) |
+| `SESSION_GLOBAL_INSTRUCTION` | `""` | Global user-level instruction file (supports `~` expansion) |
+| `SESSION_INSTRUCTION_MAX_FILE_SIZE` | `51200` | Max file size in bytes for instruction/doc files |
+| `SESSION_DOCS_SYNC_ENABLED` | `true` | Set to `false` to disable auto-syncing project docs into memory |
+| `SESSION_DOCS_SYNC_FILES` | `README.md,...` | Comma-separated list of doc files to sync as reference memories |
 
 ### Using with CLI Agents
 
@@ -155,6 +161,46 @@ MemoryMesh is **Zero-Config for AI Agents** — all operational instructions are
 | **Continue.dev** | Add MCP server in `~/.continue/config.json` |
 | **Cline / Roo Code** | Add MCP server in VS Code extension settings |
 | **Any MCP client** | `python -m memorymesh` (stdio) or `http://localhost:8090` (SSE) |
+
+## Session Start Instructions
+
+MemoryMesh can auto-load instructions and documentation at the start of every session — no manual prompting needed. Compatible with any CLI/IDE convention.
+
+### How it works
+
+When `new_session()` is called, MemoryMesh scans multiple sources in priority order and **prepends the content to the system prompt**, so the model sees the instructions from the very first turn:
+
+```
+Tier 1: Global user file           ~/.config/memorymesh/session.md
+Tier 2: Instructions directory     .memorymesh/instructions/ (all .md/.txt files, sorted)
+Tier 3: CLI/IDE-specific files     opencode.md, CLAUDE.md, .cursorrules, ... (first match wins)
+```
+
+### What to put in the file
+
+Create any of the files above with content like:
+
+```markdown
+# Session Rules
+
+- **ALWAYS** call `save_context_pair(user_message, assistant_message)` at the end of EVERY response
+- First action: call `new_session()` then `recall(query="<topic>")`
+- VIOLATION of save_context_pair = permanent data loss
+```
+
+### Multi-User & Multi-Device
+
+| Scenario | Setup |
+|----------|-------|
+| **Single user, single CLI** | Create `opencode.md` (or `CLAUDE.md` / `.cursorrules`) in your project root |
+| **Multiple CLIs on same machine** | Create `.memorymesh/instructions/` directory — works with any CLI |
+| **All projects, same user** | Set `SESSION_GLOBAL_INSTRUCTION=~/.config/memorymesh/session.md` |
+| **Each project, custom rules** | Use `.memorymesh/instructions/` per project |
+| **No instruction file at all** | MemoryMesh falls back to built-in directives — zero config needed |
+
+### Docs Sync (Automatic)
+
+When `SESSION_DOCS_SYNC_ENABLED=true` (default), MemoryMesh also reads your project's documentation files (README.md, CONTRIBUTING.md, Makefile, ...) at session start and saves them as reference memories tagged with `docs` and `project_docs`. The model can find them via `recall(query="docs")`.
 
 ### Docker
 

@@ -1,3 +1,6 @@
+> **⚠️ CRITICAL: At conversation start, call `new_session()` FIRST before any other tool.**
+> **⚠️ CRITICAL: At end of EVERY response, call `save_context_pair(user_message, assistant_message)`.**
+
 # MemoryMesh — Long-term Memory MCP Server
 
 ## Project Identity

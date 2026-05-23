@@ -21,7 +21,7 @@ from ..memory.sqlite_vec_backend import SqliteVecBackend
 from ..memory.manager import MemoryManager
 from ..memory.session_store import SessionStore
 from ..logging_ import setup_logging
-from ..prompts import RECALL_INSTRUCTION
+from ..prompts import COMBINED_AGENT_INSTRUCTION
 from ..embedder import prewarm_embedder
 from .tools import TOOLS
 from .handlers import ToolHandlers
@@ -78,7 +78,7 @@ class MemoryMeshServer:
 
     def _init_options(self):
         opts = self.mcp_server.create_initialization_options()
-        return opts.model_copy(update={"instructions": RECALL_INSTRUCTION})
+        return opts.model_copy(update={"instructions": COMBINED_AGENT_INSTRUCTION})
 
     def _register_tools(self):
         @self.mcp_server.list_tools()
@@ -101,6 +101,8 @@ class MemoryMeshServer:
                 "get_session_context": self.handlers.handle_get_session_context,
                 "new_session": self.handlers.handle_new_session,
                 "end_session": self.handlers.handle_end_session,
+                "delete_session": self.handlers.handle_delete_session,
+                "preserve_session_memories": self.handlers.handle_preserve_session_memories,
                 "save_workspace_context": self.handlers.handle_save_workspace_context,
                 "resume_session": self.handlers.handle_resume_session,
             }
@@ -120,7 +122,9 @@ class MemoryMeshServer:
                     self._safely_auto_save_tool(name, arguments, result)
                 )
 
-            return [TextContent(type="text", text=json.dumps(result, ensure_ascii=False))]
+            reminder = self.handlers.consume_reminder()
+            text = reminder + json.dumps(result, ensure_ascii=False)
+            return [TextContent(type="text", text=text)]
 
     def _create_tracked_task(self, coro) -> asyncio.Task:
         task = asyncio.create_task(coro)
@@ -143,7 +147,11 @@ class MemoryMeshServer:
         # Pre-warm embedding model synchronously so first recall is fast
         await prewarm_embedder(self.config.embedding_model)
         if self.config.session.auto_create_session:
-            session_id = await self.session_store.create_session(self.config.default_user_id)
+            system_prompt = COMBINED_AGENT_INSTRUCTION
+            session_id = await self.session_store.create_session(
+                self.config.default_user_id,
+                system_prompt=system_prompt,
+            )
             logger.info("Auto-created fresh session: %s", session_id)
             await self.handlers.set_session(session_id)
 

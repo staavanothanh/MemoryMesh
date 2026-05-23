@@ -27,6 +27,7 @@ class SessionStore:
         "created_at": "created_at TEXT NOT NULL",
         "updated_at": "updated_at TEXT NOT NULL",
         "ended_at": "ended_at TEXT DEFAULT NULL",
+        "deleted": "deleted INTEGER DEFAULT 0",
     }
 
     async def initialize(self):
@@ -136,6 +137,15 @@ class SessionStore:
         await self._db.commit()
         logger.info("Session ended: %s", session_id)
 
+    async def mark_deleted(self, session_id: str):
+        now = datetime.now(timezone.utc).isoformat()
+        await self._db.execute(
+            "UPDATE sessions SET status = 'ended', deleted = 1, ended_at = ?, updated_at = ? WHERE session_id = ?",
+            (now, now, session_id),
+        )
+        await self._db.commit()
+        logger.info("Session deleted: %s", session_id)
+
     async def update_system_prompt(self, session_id: str, system_prompt: str):
         now = datetime.now(timezone.utc).isoformat()
         await self._db.execute(
@@ -178,17 +188,18 @@ class SessionStore:
         row = await cursor.fetchone()
         return dict(row) if row else None
 
-    async def list_sessions(self, user_id: str, limit: int = 10, status: Optional[str] = None) -> List[Dict[str, Any]]:
+    async def list_sessions(self, user_id: str, limit: int = 10, status: Optional[str] = None, include_deleted: bool = False) -> List[Dict[str, Any]]:
+        conditions = ["user_id = ?"]
+        params: list = [user_id]
+        if not include_deleted:
+            conditions.append("(deleted IS NULL OR deleted = 0)")
         if status:
-            cursor = await self._db.execute(
-                "SELECT * FROM sessions WHERE user_id = ? AND status = ? ORDER BY created_at DESC LIMIT ?",
-                (user_id, status, limit),
-            )
-        else:
-            cursor = await self._db.execute(
-                "SELECT * FROM sessions WHERE user_id = ? ORDER BY created_at DESC LIMIT ?",
-                (user_id, limit),
-            )
+            conditions.append("status = ?")
+            params.append(status)
+        cursor = await self._db.execute(
+            f"SELECT * FROM sessions WHERE {' AND '.join(conditions)} ORDER BY created_at DESC LIMIT ?",
+            (*params, limit),
+        )
         rows = await cursor.fetchall()
         return [dict(r) for r in rows]
 
