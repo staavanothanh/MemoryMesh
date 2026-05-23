@@ -27,6 +27,7 @@ BOOTSTRAP_SNAPSHOT_PROMPT = """You are a high-level technical product manager an
 Return ONLY a valid JSON object matching this exact schema:
 {{
   "narrative_summary": "string",
+  "compact_summary": "string",
   "discussion_topic": "string",
   "work_done": "string",
   "architectural_decisions": "string",
@@ -36,6 +37,7 @@ Return ONLY a valid JSON object matching this exact schema:
 
 Field descriptions:
 - narrative_summary: "A single dense paragraph summarizing what was discussed, why it was debated, and the current focus (max 100 words)"
+- compact_summary: "A standalone concise paragraph (max 200 words) summarizing key information, decisions, and state — used as session log"
 - discussion_topic: "The exact conceptual component or bug being addressed (max 40 words)"
 - work_done: "Specific files changed, tests run, commands executed, and concrete achievements this session (max 50 words)"
 - architectural_decisions: "Core tech patterns implemented, files changed, or libraries swapped (max 50 words)"
@@ -44,6 +46,7 @@ Field descriptions:
 
 Rules:
 - narrative_summary is MANDATORY — this is the primary recovery text for cold-start
+- compact_summary is MANDATORY — this replaces the separate session compaction step
 - Only include information EXPLICITLY present in the log
 - If a field has no information, set it to an empty string
 - Do not include any conversational filler, intro, or markdown code blocks

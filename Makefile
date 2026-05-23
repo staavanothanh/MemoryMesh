@@ -30,7 +30,7 @@ typecheck:
 	fi
 
 clean:
-	python -c "import shutil, pathlib; [shutil.rmtree(p, ignore_errors=True) for p in ['db', pathlib.Path('.opencode')/'data', 'build', 'dist']]"
+	python -c "import shutil, pathlib; [shutil.rmtree(p, ignore_errors=True) for p in ['db', 'build', 'dist']]"
 	python -c "import pathlib; [f.unlink(missing_ok=True) for f in pathlib.Path('.').glob('*.log') if f.is_file()]"
 	python -c "import shutil, pathlib; [shutil.rmtree(p, ignore_errors=True) for p in pathlib.Path('.').rglob('__pycache__')]"
 	python -c "import pathlib; [f.unlink(missing_ok=True) for f in pathlib.Path('.').rglob('*.pyc')]"

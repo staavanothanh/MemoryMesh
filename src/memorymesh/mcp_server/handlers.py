@@ -1,5 +1,6 @@
 import json
 import asyncio
+import time
 import logging
 from typing import Optional, List
 from ..hooks import hooks as global_hooks
@@ -9,7 +10,7 @@ from ..memory.fact_extractor import FactExtractor
 from ..scanner import CodebaseScanner
 from ..errors import MemoryMeshError
 from ..utils.json_parser import clean_and_parse_llm_json
-from ..prompts import RECALL_INSTRUCTION, SAVE_CONTEXT_INSTRUCTION, PERMANENT_LOG_DIRECTIVE, SESSION_COMPACT_PROMPT, BOOTSTRAP_SNAPSHOT_PROMPT
+from ..prompts import RECALL_INSTRUCTION, SAVE_CONTEXT_INSTRUCTION, PERMANENT_LOG_DIRECTIVE, BOOTSTRAP_SNAPSHOT_PROMPT
 
 _MAGENTA = "\033[1;35m"
 _CYAN = "\033[1;36m"
@@ -27,9 +28,7 @@ class ToolHandlers:
     _MAX_BATCH_SIZE = 3
     _BOOTSTRAP_QUERIES = [
         "workspace state project bootstrap",
-        "session summary next steps last session",
         "cuối buổi trước chúng ta làm gì discussion topic",
-        "recent session completed summary context latest",
     ]
 
     _READ_ONLY_TOOLS = frozenset({"ping", "list_sessions", "list_memories", "get_session_context"})
@@ -45,6 +44,7 @@ class ToolHandlers:
         self._fact_batch_lock = asyncio.Lock()
         self._global_bootstrap_ram_cache: dict[str, str] = {}
         self._recall_results_cache: dict[str, list] = {}
+        self._last_depth_check_time: float = 0.0
 
     async def set_session(self, session_id: str):
         self._current_session_id = session_id
@@ -119,11 +119,13 @@ class ToolHandlers:
             return
         if tool_name == "save_context_pair":
             self._exchange_unsaved = False
-            return
-        if tool_name not in ("recall", "end_session"):
+        elif tool_name not in ("recall", "end_session"):
             self._exchange_unsaved = True
 
-        asyncio.create_task(self._layer3_depth_check())
+        now = time.monotonic()
+        if now - self._last_depth_check_time >= 10.0:
+            self._last_depth_check_time = now
+            asyncio.create_task(self._layer3_depth_check())
 
     async def _trigger_layer2(self):
         if not self._current_session_id:
@@ -154,9 +156,8 @@ class ToolHandlers:
             current_depth = await self.session_store.get_context_log_count(self._current_session_id)
             threshold = self.manager.config.session.compact_threshold
             if current_depth >= int(threshold * 0.8):
-                asyncio.create_task(self._compact_session(self._current_session_id, self.manager.config.default_user_id))
                 asyncio.create_task(self._create_bootstrap_snapshot(self._current_session_id, self.manager.config.default_user_id))
-                logger.info("Layer 3 depth check: %d entries >= 80%% of %d, compacting", current_depth, threshold)
+                logger.info("Layer 3 depth check: %d entries >= 80%% of %d, creating snapshot", current_depth, threshold)
         except Exception as e:
             logger.warning("Layer 3 depth check failed: %s", e)
 
@@ -167,7 +168,7 @@ class ToolHandlers:
             if not path or path == self.manager.config.default_user_id:
                 path = os.getcwd()
             scanner = CodebaseScanner(workspace_path=path)
-            snapshot = scanner.scan()
+            snapshot = await asyncio.to_thread(scanner.scan)
             summary = snapshot.get("summary", "")
             await self.session_store.save_workspace_snapshot(self._current_session_id, snapshot)
             memory_id = await self.manager.add_memory(
@@ -182,69 +183,9 @@ class ToolHandlers:
         except Exception as e:
             logger.warning("Codebase auto-scan failed: %s", e)
 
-    async def _auto_recall_context(self, user_id: str = "", max_items: int = 3):
-        if not self._current_session_id:
-            return
-        uid = user_id or self.manager.config.default_user_id
-        try:
-            results = await self.manager.search_memory(
-                query="session context project plan development",
-                top_k=max_items,
-                user_id=uid,
-                level_filter=["knowledge", "user"],
-                workspace_path=await self._get_workspace_path(),
-            )
-            if results:
-                summary = "\n".join(f"- [{r['importance']}] {r['content'][:200]}" for r in results)
-                await self.session_store.log_context(
-                    self._current_session_id, "assistant",
-                    f"[Auto-Recalled Context]\n{summary}",
-                    "recall",
-                )
-                logger.info("Auto-recalled %d memories for session %s", len(results), self._current_session_id)
-        except Exception as e:
-            logger.warning("Auto-recall failed: %s", e)
-
-    async def _compact_session(self, session_id: str, user_id: str = ""):
-        uid = user_id or self.manager.config.default_user_id
-        try:
-            log = await self.session_store.get_context_log(session_id, limit=self.manager.config.session.compact_threshold)
-            if len(log) < 3:
-                return
-            lines = [f"{e['role']}: {e['content']}" for e in log]
-            total = sum(len(l) for l in lines)
-            if total > 15000:
-                kept = []; acc = 0
-                for e in reversed(log):
-                    l = f"{e['role']}: {e['content']}"
-                    if acc + len(l) > 15000: break
-                    kept.append(l); acc += len(l)
-                lines = list(reversed(kept))
-            log_text = "\n".join(lines)
-            prompt = SESSION_COMPACT_PROMPT.format(log=log_text)
-            summary = ""
-            try:
-                response = await self.manager.router.call_llm_background(prompt)
-                summary = response.strip().strip('"').strip("'")
-            except Exception as e:
-                logger.warning("LLM compact failed, using fallback: %s", e)
-                summary = f"Session {session_id}: {len(log)} messages, ended."
-            if not summary:
-                summary = f"Session {session_id}: {len(log)} messages, ended."
-            memory_id = await self.manager.add_memory(
-                text=f"[Session Summary] {summary[:1000]}",
-                tags=["session_summary", "compacted"],
-                importance=4,
-                level="knowledge",
-                user_id=uid,
-                workspace_path=await self._get_workspace_path(),
-            )
-            logger.info("Session compacted: %s -> memory=%s", session_id, memory_id)
-        except Exception as e:
-            logger.warning("Session compaction failed: %s", e)
-
     async def _create_bootstrap_snapshot(self, session_id: str, user_id: str = "") -> Optional[str]:
         """Create L1 bootstrap snapshot (~1k tokens) from session context and save as a bootstrap memory.
+        Also saves the compact_summary as a standalone session summary.
         Returns the stored text for RAM caching, or None on failure.
         """
         uid = user_id or self.manager.config.default_user_id
@@ -272,6 +213,7 @@ class ToolHandlers:
                 logger.warning("LLM bootstrap snapshot failed, using fallback: %s", e)
                 data = {
                     "narrative_summary": f"Session {session_id[:8]} ended with {len(log)} messages.",
+                    "compact_summary": f"Session {session_id[:8]} ended with {len(log)} messages.",
                     "discussion_topic": "",
                     "work_done": "",
                     "architectural_decisions": "",
@@ -279,14 +221,15 @@ class ToolHandlers:
                     "next_steps": "",
                 }
 
-            fields = ("narrative_summary", "discussion_topic", "work_done",
+            fields = ("narrative_summary", "compact_summary", "discussion_topic", "work_done",
                       "architectural_decisions", "last_milestone", "next_steps")
             for key in fields:
                 data.setdefault(key, "")
 
             narrative = data.get("narrative_summary", "").strip()
+            compact = data.get("compact_summary", "").strip()
             details = []
-            for key in fields[1:]:
+            for key in fields[2:]:
                 val = data.get(key, "").strip()
                 if val:
                     details.append(f"\n\u25a0 {key.replace('_', ' ').title()}: {val[:200]}")
@@ -302,6 +245,18 @@ class ToolHandlers:
                 user_id=uid,
                 workspace_path=await self._get_workspace_path(),
             )
+
+            # Save compact_summary as standalone session summary memory
+            if compact:
+                await self.manager.add_memory(
+                    text=f"[Session Summary] {compact[:1000]}",
+                    tags=["session_summary", "compacted"],
+                    importance=4,
+                    level="knowledge",
+                    user_id=uid,
+                    workspace_path=await self._get_workspace_path(),
+                )
+
             _log_bg("Bootstrap", f"Snapshot saved for session {session_id[:8]} -> memory={memory_id[:12]}", emoji="")
             return full_text
         except Exception as e:
@@ -338,40 +293,42 @@ class ToolHandlers:
             logger.warning("Batch fact extraction failed: %s", e)
 
     async def _finalize_session(self, session_id: str, user_id: str):
-        """Core lifecycle: flush facts + compact + bootstrap + mark ended.
+        """Core lifecycle: bootstrap + mark ended.
 
         Idempotent — safe to call multiple times. Each sub-step has its own
         error handling so a single failure doesn't block the rest.
         """
         try:
             _log_bg("Finalize", f"Finalizing session {session_id[:12]}...", emoji="")
-            if self.manager.config.session.auto_compact_on_end:
-                await self._compact_session(session_id, user_id)
             snapshot_text = await self._create_bootstrap_snapshot(session_id, user_id)
             wp = await self._get_workspace_path()
             cache_key = f"{user_id}:{wp}" if wp else user_id
             if snapshot_text:
                 self._global_bootstrap_ram_cache[cache_key] = snapshot_text
-            # Pre-warm search cache cho session tiếp theo — chạy TRƯỚC khi close
-            # Chạy độc lập với snapshot_text để không mất pre-warm nếu LLM fail
-            try:
-                results, _, _ = await self.manager.search_with_fallback(
-                    query="session summary important decisions next steps",
-                    top_k=5, user_id=user_id, workspace_path=wp,
-                    max_tokens=500,
-                )
-                if results:
-                    mem_summary = "\n".join(f"[MEM] {r['content'][:200]}" for r in results)
-                    existing = self._global_bootstrap_ram_cache.get(cache_key, "")
-                    self._global_bootstrap_ram_cache[cache_key] = f"{existing}\n\nPre-computed:\n{mem_summary}" if existing else mem_summary
-                    self._recall_results_cache[cache_key] = results
-            except Exception:
-                pass
-            await self._flush_fact_buffer()
+
+            # Pre-warm search cache + flush fact buffer — fire-and-forget
+            asyncio.create_task(self._prewarm_and_flush(cache_key, user_id, wp))
             await self.session_store.end_session(session_id)
             _log_bg("Finalize", f"Session {session_id[:12]} finalized", emoji="")
         except Exception as e:
             logger.error("Session finalization failed for %s: %s", session_id, e)
+
+    async def _prewarm_and_flush(self, cache_key: str, user_id: str, wp: str):
+        """Non-blocking pre-warm search + fact buffer flush after session finalization."""
+        try:
+            results, _, _ = await self.manager.search_with_fallback(
+                query="session summary important decisions next steps",
+                top_k=5, user_id=user_id, workspace_path=wp,
+                max_tokens=500,
+            )
+            if results:
+                mem_summary = "\n".join(f"[MEM] {r['content'][:200]}" for r in results)
+                existing = self._global_bootstrap_ram_cache.get(cache_key, "")
+                self._global_bootstrap_ram_cache[cache_key] = f"{existing}\n\nPre-computed:\n{mem_summary}" if existing else mem_summary
+                self._recall_results_cache[cache_key] = results
+        except Exception:
+            pass
+        await self._flush_fact_buffer()
 
     async def _warm_resume_cache(self, session_id: str, uid: str, wp: str | None):
         """Pre-warm cache for resumed session — runs async, không block."""
@@ -806,19 +763,24 @@ class ToolHandlers:
 
             # Extract project context from git for immediate model awareness
             project_context = ""
+            loop = asyncio.get_event_loop()
             try:
                 import subprocess, os
                 wp = workspace_path or os.getcwd()
                 if os.path.isdir(os.path.join(wp, ".git")):
-                    log = subprocess.run(
-                        ["git", "log", "--oneline", "-5"],
-                        capture_output=True, text=True, timeout=5, cwd=wp,
+                    log = await loop.run_in_executor(
+                        None, lambda: subprocess.run(
+                            ["git", "log", "--oneline", "-5"],
+                            capture_output=True, text=True, timeout=5, cwd=wp,
+                        )
                     )
                     if log.stdout:
                         project_context = f"Recent commits:\n{log.stdout.strip()}"
-                    diff = subprocess.run(
-                        ["git", "diff", "--stat"],
-                        capture_output=True, text=True, timeout=5, cwd=wp,
+                    diff = await loop.run_in_executor(
+                        None, lambda: subprocess.run(
+                            ["git", "diff", "--stat"],
+                            capture_output=True, text=True, timeout=5, cwd=wp,
+                        )
                     )
                     if diff.stdout:
                         project_context += f"\nUncommitted changes:\n{diff.stdout.strip()[:300]}"
@@ -883,18 +845,23 @@ class ToolHandlers:
                 snapshot["files"] = {"dirs": root_dirs, "files": root_files}
                 git_dir = os.path.join(workspace_path, ".git")
                 if os.path.isdir(git_dir):
+                    loop = asyncio.get_event_loop()
                     try:
-                        result = subprocess.run(
-                            ["git", "log", "--oneline", "-5"],
-                            capture_output=True, text=True, timeout=5, cwd=workspace_path,
+                        result = await loop.run_in_executor(
+                            None, lambda: subprocess.run(
+                                ["git", "log", "--oneline", "-5"],
+                                capture_output=True, text=True, timeout=5, cwd=workspace_path,
+                            )
                         )
                         snapshot["git"]["recent_commits"] = result.stdout.strip().split("\n") if result.stdout else []
                     except Exception:
                         snapshot["git"]["recent_commits"] = []
                     try:
-                        result = subprocess.run(
-                            ["git", "status", "--short"],
-                            capture_output=True, text=True, timeout=5, cwd=workspace_path,
+                        result = await loop.run_in_executor(
+                            None, lambda: subprocess.run(
+                                ["git", "status", "--short"],
+                                capture_output=True, text=True, timeout=5, cwd=workspace_path,
+                            )
                         )
                         snapshot["git"]["status"] = result.stdout.strip().split("\n") if result.stdout else []
                     except Exception:

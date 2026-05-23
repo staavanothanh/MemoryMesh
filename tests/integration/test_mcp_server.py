@@ -118,7 +118,8 @@ async def test_handle_new_session(handlers, session_store):
     assert result["data"]["message"] == "Session mới đã được tạo"
 
     session = await session_store.get_session(result["data"]["session_id"])
-    assert session["system_prompt"] == "Test prompt"
+    assert "Test prompt" in session["system_prompt"]
+    assert "PERMANENT LOG DIRECTIVE" in session["system_prompt"]
     assert session["status"] == "active"
 
     session_id2 = result["data"]["session_id"]
