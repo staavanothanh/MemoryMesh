@@ -44,6 +44,7 @@ class ToolHandlers:
         self._fact_batch_buffer: list[str] = []
         self._fact_batch_lock = asyncio.Lock()
         self._global_bootstrap_ram_cache: dict[str, str] = {}
+        self._recall_results_cache: dict[str, list] = {}
 
     async def set_session(self, session_id: str):
         self._current_session_id = session_id
@@ -351,11 +352,40 @@ class ToolHandlers:
                 wp = await self._get_workspace_path()
                 cache_key = f"{user_id}:{wp}" if wp else user_id
                 self._global_bootstrap_ram_cache[cache_key] = snapshot_text
+                # Pre-warm search cache cho session tiếp theo — chạy TRƯỚC khi close
+                try:
+                    results, _, _ = await self.manager.search_with_fallback(
+                        query="session summary important decisions next steps",
+                        top_k=5, user_id=user_id, workspace_path=wp,
+                        max_tokens=500,
+                    )
+                    if results:
+                        mem_summary = "\n".join(f"[MEM] {r['content'][:200]}" for r in results)
+                        self._global_bootstrap_ram_cache[cache_key] += f"\n\n{mem_summary}"
+                        self._recall_results_cache[cache_key] = results
+                except Exception:
+                    pass
             await self._flush_fact_buffer()
             await self.session_store.end_session(session_id)
             _log_bg("Finalize", f"Session {session_id[:12]} finalized", emoji="")
         except Exception as e:
             logger.error("Session finalization failed for %s: %s", session_id, e)
+
+    async def _warm_resume_cache(self, session_id: str, uid: str, wp: str | None):
+        """Pre-warm cache for resumed session — runs async, không block."""
+        try:
+            results, _, _ = await self.manager.search_with_fallback(
+                query="session summary context next steps",
+                top_k=10, user_id=uid, workspace_path=wp,
+            )
+            cache_key = f"{uid}:{wp}" if wp else uid
+            if results:
+                summary = "\n".join(f"- {r['content'][:200]}" for r in results[:5])
+                existing = self._global_bootstrap_ram_cache.get(cache_key, "")
+                self._global_bootstrap_ram_cache[cache_key] = existing + f"\n\nRecalled context:\n{summary}"
+                self._recall_results_cache[cache_key] = results
+        except Exception as e:
+            logger.warning("Resume cache warm failed: %s", e)
 
     async def _extract_and_save_facts(self, conversation: str, user_id: str = ""):
         """Buffer conversation pair; flush to LLM in batch when threshold is reached."""
@@ -390,14 +420,21 @@ class ToolHandlers:
 
         wp = args.get("workspace_path") or await self._get_workspace_path()
         uid = args.get("user_id", self.manager.config.default_user_id)
+        cache_key = f"{uid}:{wp}" if wp else uid
         try:
-            results, tier_used, _ = await self.manager.search_with_fallback(
-                query=args["query"],
-                top_k=args.get("top_k", 10),
-                user_id=uid,
-                workspace_path=wp,
-                max_tokens=args.get("max_tokens"),
-            )
+            # Check recall cache trước ANN search
+            cached_results = self._recall_results_cache.pop(cache_key, None)
+            if cached_results:
+                results = cached_results
+                tier_used = "cache"
+            else:
+                results, tier_used, _ = await self.manager.search_with_fallback(
+                    query=args["query"],
+                    top_k=args.get("top_k", 10),
+                    user_id=uid,
+                    workspace_path=wp,
+                    max_tokens=args.get("max_tokens"),
+                )
             _log_bg("Recall", f"Tier={tier_used}, results={len(results)}, query='{args['query'][:80]}'", emoji="")
             await self._log_context("assistant", f"Recalled {len(results)} memories via {tier_used} for: {args['query'][:200]}", "recall", str(args))
             if results:
@@ -405,7 +442,6 @@ class ToolHandlers:
 
             # Always prepend bootstrap context from RAM cache or tag lookup
             bootstrap_text = ""
-            cache_key = f"{uid}:{wp}" if wp else uid
             cached = self._global_bootstrap_ram_cache.get(cache_key)
             if cached:
                 bootstrap_text = cached
@@ -888,33 +924,29 @@ class ToolHandlers:
             if not session:
                 return {"status": "error", "error": f"Session {session_id} not found"}
 
+            # Layer 2: DB reads — fast (~5ms)
             context = await self.session_store.get_context_log(session_id, limit=50)
             snapshots = await self.session_store.get_workspace_snapshots(session_id)
 
-            recall_query = session.get("system_prompt", "") or f"session {session_id[:8]} context"
-            memories = await self.manager.search_memory(
-                query=recall_query,
-                top_k=top_k,
-                user_id=user_id,
-                workspace_path=await self._get_workspace_path(),
-            )
+            # Layer 1: instant from RAM cache
+            wp = await self._get_workspace_path()
+            cache_key = f"{user_id}:{wp}" if wp else user_id
+            cached_bootstrap = self._global_bootstrap_ram_cache.get(cache_key, "")
 
-            # Extra cross-session recall: surface context from other recent sessions
-            extra = await self.manager.search_memory(
-                query="recent session context project work",
-                top_k=5,
-                user_id=user_id,
-                workspace_path=await self._get_workspace_path(),
-                max_tokens=500,
-            )
-            seen = {m["id"] for m in memories}
-            for m in extra:
-                if m["id"] not in seen:
-                    seen.add(m["id"])
-                    memories.append(m)
+            # Layer 3: cached recall results từ pre-compute
+            cached_results = self._recall_results_cache.pop(cache_key, None)
+            if cached_results:
+                recalled = [
+                    {"id": m["id"], "content": m["content"][:300], "score": m["score"]}
+                    for m in cached_results
+                ]
+            else:
+                recalled = []
+                # Fire background search — không block response
+                asyncio.create_task(self._warm_resume_cache(session_id, user_id, wp))
 
-            await self._log_context("assistant", f"Resumed session {session_id}: {len(context)} messages, {len(memories)} memories", "resume_session", str(args))
-            await self._save_context_memory("assistant", f"Resumed session {session_id}: {len(context)} messages, {len(memories)} memories", "resume_session")
+            await self._log_context("assistant", f"Resumed session {session_id}: {len(context)} messages, {len(recalled)} memories", "resume_session", str(args))
+            await self._save_context_memory("assistant", f"Resumed session {session_id}: {len(context)} messages, {len(recalled)} memories", "resume_session")
 
             return {
                 "status": "success",
@@ -922,11 +954,9 @@ class ToolHandlers:
                     "session": session,
                     "context_log": context,
                     "workspace_snapshots": snapshots,
-                    "recalled_memories": [
-                        {"id": m["id"], "content": m["content"][:300], "score": m["score"]}
-                        for m in memories
-                    ],
-                    "message": f"Đã khôi phục session {session_id[:8]}...",
+                    "recalled_memories": recalled,
+                    "bootstrap": cached_bootstrap,
+                    "message": f"Đã khôi phục session {session_id[:8]}..." + ("" if recalled else " Memories loading in background."),
                 },
             }
         except MemoryMeshError as e:
