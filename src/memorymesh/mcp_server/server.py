@@ -113,7 +113,7 @@ class MemoryMeshServer:
 
             result = await handler(arguments)
 
-            # LỚP 2: Auto-save mọi tool call (trừ read-only để tránh loop ghi đè)
+            # LAYER 2: Auto-save every tool call (except read-only to avoid overwrite loop)
             read_only_tools = ("ping", "list_sessions", "list_memories", "get_session_context", "recall")
             if name not in read_only_tools:
                 asyncio.create_task(

@@ -115,7 +115,7 @@ async def test_handle_new_session(handlers, session_store):
     })
     assert result["status"] == "success"
     assert "session_id" in result["data"]
-    assert result["data"]["message"] == "Session mới đã được tạo"
+    assert result["data"]["message"] == "New session created"
 
     session = await session_store.get_session(result["data"]["session_id"])
     assert "Test prompt" in session["system_prompt"]
@@ -150,7 +150,7 @@ async def test_handle_end_session(handlers, session_store):
 
     result = await handlers.handle_end_session({"session_id": session_id})
     assert result["status"] == "success"
-    assert result["data"]["message"] == "Session đã kết thúc"
+    assert result["data"]["message"] == "Session ended"
 
     session = await session_store.get_session(session_id)
     assert session["status"] == "ended"

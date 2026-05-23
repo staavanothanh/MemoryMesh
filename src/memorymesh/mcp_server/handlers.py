@@ -28,7 +28,7 @@ class ToolHandlers:
     _MAX_BATCH_SIZE = 3
     _BOOTSTRAP_QUERIES = [
         "workspace state project bootstrap",
-        "cuối buổi trước chúng ta làm gì discussion topic",
+        "what did we do last session discussion topic",
     ]
 
     _READ_ONLY_TOOLS = frozenset({"ping", "list_sessions", "list_memories", "get_session_context"})
@@ -331,7 +331,7 @@ class ToolHandlers:
         await self._flush_fact_buffer()
 
     async def _warm_resume_cache(self, session_id: str, uid: str, wp: str | None):
-        """Pre-warm cache for resumed session — runs async, không block."""
+        """Pre-warm cache for resumed session — runs async, does not block."""
         try:
             results, _, _ = await self.manager.search_with_fallback(
                 query="session summary context next steps",
@@ -341,7 +341,7 @@ class ToolHandlers:
             if results:
                 summary = "\n".join(f"- {r['content'][:200]}" for r in results[:5])
                 existing = self._global_bootstrap_ram_cache.get(cache_key, "")
-                # Dedup: nếu "Recalled context:" đã tồn tại, thay thế nội dung
+                # Dedup: if "Recalled context:" already exists, replace content
                 existing_clean = existing.split("\n\nRecalled context:")[0].strip()
                 self._global_bootstrap_ram_cache[cache_key] = existing_clean + f"\n\nRecalled context:\n{summary}" if existing_clean else f"Recalled context:\n{summary}"
                 self._recall_results_cache[cache_key] = results
@@ -383,7 +383,7 @@ class ToolHandlers:
         uid = args.get("user_id", self.manager.config.default_user_id)
         cache_key = f"{uid}:{wp}" if wp else uid
         try:
-            # Check recall cache trước ANN search
+            # Check recall cache before ANN search
             cached_results = self._recall_results_cache.pop(cache_key, None)
             if cached_results:
                 results = cached_results
@@ -790,11 +790,16 @@ class ToolHandlers:
             data = {
                 "session_id": session_id,
                 "memory_id": memory_id,
-                "message": "Session mới đã được tạo",
+                "message": "New session created",
                 "project_context": project_context or "MemoryMesh MCP server — memory mesh system",
                 "recall_instruction": RECALL_INSTRUCTION,
                 "save_instruction": SAVE_CONTEXT_INSTRUCTION,
                 "permanent_log_directive": PERMANENT_LOG_DIRECTIVE,
+                "tool_registry_reminder": (
+                    "MANDATORY: Re-read all tool descriptions (Fat Description) "
+                    "to remember mandatory tools: save_context_pair, recall, remember. "
+                    "This prevents forgetting in long conversations."
+                ),
             }
 
             asyncio.create_task(self._auto_scan_codebase(workspace_path, user_id))
@@ -821,7 +826,7 @@ class ToolHandlers:
             if session_id == self._current_session_id:
                 self._current_session_id = ""
             await self._log_context("assistant", f"Session ended: {session_id}", "end_session", str(args))
-            return {"status": "success", "data": {"session_id": session_id, "message": "Session đã kết thúc"}}
+            return {"status": "success", "data": {"session_id": session_id, "message": "Session ended"}}
         except MemoryMeshError as e:
             logger.error("End session failed: %s", e)
             return {"status": "error", "error": str(e)}
@@ -910,7 +915,7 @@ class ToolHandlers:
             cache_key = f"{user_id}:{wp}" if wp else user_id
             cached_bootstrap = self._global_bootstrap_ram_cache.get(cache_key, "")
 
-            # Layer 3: cached recall results từ pre-compute
+            # Layer 3: cached recall results from pre-compute
             cached_results = self._recall_results_cache.pop(cache_key, None)
             if cached_results:
                 recalled = [
@@ -919,7 +924,7 @@ class ToolHandlers:
                 ]
             else:
                 recalled = []
-                # Fire background search — không block response
+                # Fire background search — does not block response
                 asyncio.create_task(self._warm_resume_cache(session_id, user_id, wp))
 
             await self._log_context("assistant", f"Resumed session {session_id}: {len(context)} messages, {len(recalled)} memories", "resume_session", str(args))
@@ -933,7 +938,7 @@ class ToolHandlers:
                     "workspace_snapshots": snapshots,
                     "recalled_memories": recalled,
                     "bootstrap": cached_bootstrap,
-                    "message": f"Đã khôi phục session {session_id[:8]}..." + ("" if recalled else " Memories loading in background."),
+                    "message": f"Restored session {session_id[:8]}..." + ("" if recalled else " Memories loading in background."),
                 },
             }
         except MemoryMeshError as e:
