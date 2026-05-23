@@ -10,22 +10,24 @@ Hybrid search (vector + FTS5) in a single SQLite database, cross-session recall 
 git clone https://github.com/staavanothanh/MemoryMesh.git
 cd MemoryMesh
 
-# --- Linux / macOS ---
-chmod +x setup.sh && ./setup.sh
+# Create venv & install
+python -m venv .venv
+source .venv/bin/activate        # Linux/macOS
+# .venv\Scripts\activate         # Windows
 
-# --- Windows ---
-.\setup.ps1
+pip install -e ".[test]"         # install with test deps
+python -m memorymesh init        # one-command setup (creates .env, MCP config, instructions)
 
-# Then activate the virtual environment and run:
-python -m memorymesh
+# Start OpenCode — MCP server auto-launches
+opencode
 ```
 
 Or step by step:
 
 ```bash
-pip install -e ".[test]"       # install with test deps
-cp .env.example .env           # configure your LLM endpoint
-python -m memorymesh           # start MCP server (stdio)
+pip install -e ".[test]"
+cp .env.example .env             # configure your LLM endpoint
+python -m memorymesh             # start standalone MCP server
 ```
 
 ## Architecture
@@ -77,7 +79,8 @@ MemoryMesh is an **MCP server** — compatible with any MCP client:
 
 | Agent | Setup |
 |-------|-------|
-| **OpenCode / Claude Code** | Add to `.opencode.json` MCP config as `memorymesh` |
+| **OpenCode** | `python -m memorymesh init` generates `.opencode/opencode.json` + instruction file automatically. Then just run `opencode`. |
+| **Claude Code** | Add MCP server in Claude Code config |
 | **Cursor** | Add MCP server in Cursor settings |
 | **Continue.dev** | Add MCP server in `~/.continue/config.json` |
 | **Cline / Roo Code** | Add MCP server in VS Code extension settings |

@@ -211,13 +211,13 @@ class MemoryManager:
             logger.error("Enrichment failed for %s: %s", memory_id, e)
 
     async def _maybe_expire_memories(self, user_id: str):
-        """Expire old session memories, non-blocking."""
+        """Smart memory decay for low-importance ephemeral memories, non-blocking."""
         try:
-            expired = await self._consolidator.run_expiry(user_id)
+            expired = await self._consolidator.run_memory_decay(user_id)
             if expired:
-                _log_bg("Expiry", f"Expired {expired} old session memories for {user_id}", emoji="")
+                _log_bg("Decay", f"Expired {expired} ephemeral memories for {user_id}", emoji="")
         except Exception as e:
-            logger.warning("Memory expiry failed for user %s: %s", user_id, e)
+            logger.warning("Memory decay failed for user %s: %s", user_id, e)
 
     async def _maybe_consolidate(self, user_id: str):
         """Run consolidation if enabled, non-blocking."""
@@ -437,13 +437,13 @@ class MemoryManager:
         )
 
         # Hierarchical workspace filter: siblings and children visible, parent invisible
+        # Soft penalty for non-matching workspaces (score *= 0.7) instead of hard filter
+        # to preserve cross-project recall within the same database.
         if workspace_path:
-            results = [
-                m for m in results
-                if self._is_workspace_visible(
-                    m.get("metadata", {}).get("workspace_path"), workspace_path
-                )
-            ]
+            for m in results:
+                mem_wp = m.get("metadata", {}).get("workspace_path")
+                if not self._is_workspace_visible(mem_wp, workspace_path):
+                    m["score"] *= 0.7
 
         # Filter out consolidated, expired, and archived memories
         results = [
@@ -487,6 +487,19 @@ class MemoryManager:
                 break
             limited_results.append(mem)
             total_tokens += mem_tokens
+
+        # Memory Promotion: reinforce strongly recalled memories (score >= 0.7)
+        for mem in limited_results:
+            score = mem.get("score", 0)
+            if score >= 0.7:
+                prom_meta = mem.get("metadata", {})
+                lvl = prom_meta.get("level", "user")
+                if lvl in ("user", "knowledge"):
+                    old_imp = prom_meta.get("importance", 3)
+                    if old_imp < 5:
+                        self._create_tracked_task(
+                            self.backend.update_metadata(mem["id"], {"importance": old_imp + 1})
+                        )
 
         return [
             SearchResult(

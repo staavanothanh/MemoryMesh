@@ -1,4 +1,4 @@
-.PHONY: install test run lint typecheck clean setup
+.PHONY: install test run lint typecheck setup clean
 
 install:
 	pip install -e ".[test]"
@@ -11,9 +11,9 @@ run:
 
 setup:
 	pip install -e ".[test]"
+	python -m memorymesh init
 	@echo "---"
-	@echo "MemoryMesh installed. Copy .env.example -> .env and edit it."
-	@echo "Run 'make run' to start the server."
+	@echo "MemoryMesh ready. Edit .env if needed, then run 'opencode'."
 
 lint:
 	@if command -v ruff >/dev/null 2>&1; then \

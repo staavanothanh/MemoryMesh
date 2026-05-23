@@ -217,9 +217,17 @@ class ConsolidationEngine:
             logger.info("Fact consolidation: resolved %d groups for user %s", resolved_count, user_id)
         return resolved_count
 
-    async def run_expiry(self, user_id: str) -> int:
-        """Mark session-level memories older than TTL as expired. Returns count expired."""
-        ttl_days = self.config.consolidation.session_memory_ttl_days
+    async def run_memory_decay(self, user_id: str) -> int:
+        """Smart decay: only expire low-importance, non-workspace, session-level memories older than TTL.
+
+        Three-tier protection:
+        - importance < min_importance_to_keep (default 3)
+        - no workspace_path (ephemeral/garbage)
+        - level = 'session' (chat logs)
+        - age > ephemeral_memory_ttl_days (default 7)
+        """
+        min_imp = self.config.consolidation.min_importance_to_keep
+        ttl_days = self.config.consolidation.ephemeral_memory_ttl_days
         if ttl_days <= 0:
             return 0
         all_mems = await self.backend.get_with_embeddings(user_id, limit=self.batch_size)
@@ -231,6 +239,12 @@ class ConsolidationEngine:
                 continue
             if meta.get("level") != "session":
                 continue
+            imp = meta.get("importance", 3)
+            if imp >= min_imp:
+                continue
+            wp = meta.get("workspace_path", "") or ""
+            if wp:
+                continue
             ts = meta.get("timestamp", "")
             if ts:
                 try:
@@ -241,7 +255,7 @@ class ConsolidationEngine:
                 except (ValueError, TypeError):
                     continue
         if expired_count:
-            logger.info("Expired %d old session memories for user %s", expired_count, user_id)
+            logger.info("MemoryDecay: Expired %d ephemeral memories for user %s", expired_count, user_id)
         return expired_count
 
     async def run_for_user(self, user_id: str) -> int:

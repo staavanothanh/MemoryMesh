@@ -181,9 +181,9 @@ class TestGetBootstrapScaffold:
             scaffold = await tool_handlers._get_bootstrap_scaffold(
                 "test_user", "/project",
             )
-            assert "STRICTLY FORBIDDEN" in scaffold
+            assert "Do NOT call" in scaffold
             assert "git log" in scaffold
-            assert "RECOVERED WORKSPACE CONTEXT" in scaffold
+            assert "PAST SESSION CONTEXT" in scaffold
 
 
 class TestBootstrapPrompt:

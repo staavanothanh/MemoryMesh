@@ -483,7 +483,8 @@ class SqliteVecBackend:
         async with TransactionContext(self._db):
             cursor = await self._db.execute(
                 """SELECT m.id FROM memories m, json_each(json_extract(m.metadata_json, '$.tags'))
-                   WHERE m.user_id = ? AND json_each.value = ? AND m.deleted = 0""",
+               WHERE m.user_id = ? AND json_each.value = ? AND m.deleted = 0
+               ORDER BY rowid DESC""",
                 (user_id, tag),
             )
             ids = [r[0] for r in await cursor.fetchall()]

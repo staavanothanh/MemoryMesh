@@ -51,10 +51,14 @@ class ConsolidationConfig:
     batch_size: int = 50
     enabled: bool = True
     session_memory_ttl_days: int = 7
+    min_importance_to_keep: int = 3
+    ephemeral_memory_ttl_days: int = 7
 
     def validate(self):
         assert 0.0 < self.similarity_threshold <= 1.0, "similarity_threshold must be in (0, 1]"
         assert self.min_cluster_size >= 2, "min_cluster_size must be >= 2"
+        assert 1 <= self.min_importance_to_keep <= 5, "min_importance_to_keep must be 1-5"
+        assert self.ephemeral_memory_ttl_days >= 0, "ephemeral_memory_ttl_days must be >= 0"
 
 
 @dataclass
@@ -127,6 +131,8 @@ class AppConfig:
                 batch_size=int(os.getenv("CONSOLIDATION_BATCH", "50")),
                 enabled=os.getenv("CONSOLIDATION_ENABLED", "true").lower() == "true",
                 session_memory_ttl_days=int(os.getenv("SESSION_MEMORY_TTL_DAYS", "7")),
+                min_importance_to_keep=int(os.getenv("MIN_IMPORTANCE_KEEP", "3")),
+                ephemeral_memory_ttl_days=int(os.getenv("EPHEMERAL_TTL_DAYS", "7")),
             ),
             level_weight_session=float(os.getenv("LEVEL_WEIGHT_SESSION", "2.0")),
             level_weight_user=float(os.getenv("LEVEL_WEIGHT_USER", "1.5")),

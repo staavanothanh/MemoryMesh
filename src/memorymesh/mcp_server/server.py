@@ -158,6 +158,21 @@ class MemoryMeshServer:
     async def _cleanup(self):
         logger.info("Shutting down...")
         try:
+            current_id = await self.handlers.get_current_session_id()
+            if current_id:
+                logger.info("Finalizing active session before shutdown: %s", current_id)
+                uid = self.config.default_user_id
+                # Use wait_for to prevent infinite hangs during forceful exits
+                await asyncio.wait_for(
+                    self.handlers._finalize_session(current_id, uid),
+                    timeout=5.0
+                )
+        except asyncio.TimeoutError:
+            logger.warning("Shutdown finalization timed out")
+        except Exception as e:
+            logger.warning("Shutdown finalization failed: %s", e)
+            
+        try:
             await self.backend.close()
         except Exception as e:
             logger.warning("Backend close error: %s", e)
@@ -244,7 +259,19 @@ class MemoryMeshServer:
         asyncio.run(_run())
 
     async def _shutdown(self):
-        logger.info("Received shutdown signal")
+        logger.warning("Received shutdown signal, finalizing current session...")
+        try:
+            current_id = await self.handlers.get_current_session_id()
+            if current_id:
+                uid = self.config.default_user_id
+                await asyncio.wait_for(
+                    self.handlers._finalize_session(current_id, uid),
+                    timeout=5.0,
+                )
+        except asyncio.TimeoutError:
+            logger.warning("Shutdown finalization timed out (5s), force closing...")
+        except Exception as e:
+            logger.warning("Shutdown finalization failed: %s", e)
         self._shutdown_event.set()
 
 

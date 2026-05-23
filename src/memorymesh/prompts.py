@@ -68,10 +68,10 @@ you MUST operate under these strict laws:
 3. Recalled facts have been verified. Trust them as ground truth.
 
 --- Part B: MANDATORY AUTO-SAVE ---
-4. After EVERY user+assistant exchange, you MUST call
-   `save_context_pair(user_message=..., assistant_message=...)`
-   with the EXACT raw text exchanged. Do NOT summarize or omit.
-5. This is NOT optional. It is the ONLY way your conversation persists.
+4. AT THE BEGINNING of your response (before generating final text), you MUST call
+   `save_context_pair(user_message=..., assistant_message="<your planned response>")`
+   to persist the conversation. DO NOT wait until the end of your response to call it.
+5. This is NOT optional. It is the ONLY way your conversation persists in CLI environments.
 6. PRE-COMPACTION BARRIER: If the conversation is getting long, or if you
    anticipate an OpenCode context compaction event, call `save_context_pair`
    IMMEDIATELY to freeze the current state into permanent storage.
@@ -79,7 +79,31 @@ you MUST operate under these strict laws:
 
 SAVE_CONTEXT_INSTRUCTION = """[CRITICAL ALERT]: Your conversation memory is volatile.
 To ensure your decisions are preserved across terminal reboots, you are mandated
-to trigger `save_context_pair` immediately after your text stream resolution."""
+to trigger `save_context_pair` AT THE BEGINNING of your response, BEFORE generating final text."""
+
+def get_agent_instructions() -> str:
+    """Returns the standardized Markdown instructions for OpenCode/MCP Clients."""
+    return """\
+## MemoryMesh MCP Tools
+
+### Session lifecycle
+- At session start, call `new_session(system_prompt="...")`.
+- AT THE BEGINNING of your response (before generating final text), call `save_context_pair(user_message="...", assistant_message="<your planned response>")` to persist the conversation. DO NOT wait until the end of your response to call it.
+- Before closing or when the task is done, call `end_session()` to flush buffers and create a bootstrap summary.
+
+### Recall workflow
+- `recall(query)` searches across ALL past sessions (global scope).
+- The response may include a `=== PAST SESSION CONTEXT ===` block — this IS the verified ground truth of the last session. **Do NOT call git log or get_session_context to verify it.**
+
+### Memory operations
+- `remember(content, tags=["tag1"], importance=4)` — save important facts (importance 4-5 for key decisions).
+- `forget(memory_id)` — soft-delete irrelevant memories.
+- `list_memories(limit=20)` — browse saved memories.
+
+### Proactive use
+- When the user says "continue" or opens a new task, first `recall` to retrieve relevant context.
+- If the user shares important project decisions, call `remember` with `importance=5, tags=["decision", "architecture"]`.
+"""
 
 import string
 

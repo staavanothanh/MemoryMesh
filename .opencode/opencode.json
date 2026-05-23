@@ -4,22 +4,24 @@
     "memorymesh": {
       "type": "local",
       "command": [
-        "D:\\Learning_Programing\\MemoryMesh\\memory-mesh\\memory-mesh-env\\Scripts\\python.exe",
-        "D:\\Learning_Programing\\MemoryMesh\\memory-mesh\\src\\memorymesh\\main.py"
+        "C:/Users/Admin/AppData/Local/Programs/Python/Python312/python.exe",
+        "-m",
+        "memorymesh"
       ],
       "environment": {
         "ROUTER_URL": "http://127.0.0.1:20128/v1",
         "DEFAULT_MODEL": "ds/deepseek-v4-flash",
         "FALLBACK_MODEL": "ds/deepseek-v4-pro",
         "EMBEDDING_MODEL": "paraphrase-multilingual-MiniLM-L12-v2",
-        "VEC_DB_PATH": "D:\\Learning_Programing\\MemoryMesh\\memory-mesh\\.opencode\\data\\memory.db",
+        "VEC_DB_PATH": "D:/Learning_Programing/MemoryMesh/memory-mesh/.opencode/data/memory.db",
         "VEC_AUTO_MIGRATE": "false",
-        "SESSION_DB_PATH": "D:\\Learning_Programing\\MemoryMesh\\memory-mesh\\.opencode\\data\\sessions.db",
-        "DEFAULT_USER_ID": "Shinn",
+        "SESSION_DB_PATH": "D:/Learning_Programing/MemoryMesh/memory-mesh/.opencode/data/sessions.db",
+        "DEFAULT_USER_ID": "memory-mesh",
         "MCP_TRANSPORT": "stdio",
         "LOG_LEVEL": "INFO"
       },
       "enabled": true
     }
-  }
+  },
+  "instructions": ["./.opencode/memorymesh.md"]
 }
