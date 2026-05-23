@@ -32,10 +32,9 @@ Khi phát hiện mâu thuẫn giữa ký ức mới và cũ, hệ thống tự �
 → *Áp dụng:* Đây là bản thiết kế hoàn chỉnh cho tầng `retrieval` trong MemoryMesh. Có thể triển khai từng bước, bắt đầu từ Retrieve và Fuse.
 
 ### 4. Zero Infrastructure — Một file SQLite duy nhất
-- Dùng extension `sqlite-vec` để lưu vector embedding ngay trong SQLite (không cần ChromaDB).
-- FTS5 (Full-Text Search) cho BM25.
-- Tất cả chỉ ~3,000 dòng code Python, không Docker, không Redis.
-→ *Áp dụng:* MemoryMesh có thể chọn giải pháp siêu nhẹ này thay vì ChromaDB, giúp đóng gói Docker chỉ vài MB, dễ triển khai mọi nơi.
+- Dùng extension `sqlite-vec` để lưu vector embedding ngay trong SQLite (đã thay thế ChromaDB).
+
+→ *Áp dụng:* MemoryMesh đã chọn giải pháp siêu nhẹ này thay vì ChromaDB, giúp đóng gói Docker chỉ vài MB, dễ triển khai mọi nơi.
 
 ### 5. MCP Native
 Cấu hình trực tiếp trong `mcp_servers.json` cho Claude Code, Cursor, hoặc bất kỳ MCP client nào.
@@ -54,7 +53,7 @@ Cấu hình trực tiếp trong `mcp_servers.json` cho Claude Code, Cursor, ho�
 ### Hướng áp dụng vào MemoryMesh
 - Áp dụng retrieval pipeline 6 giai đoạn: Đây sẽ là xương sống của search_memory(). Khởi đầu bằng việc kết hợp BM25 + vector, sau đó thêm entity graph.
 
-- Sử dụng SQLite + sqlite-vec thay ChromaDB: Giảm phụ thuộc, tối giản hóa stack kỹ thuật, phù hợp với yêu cầu local-first.
+- Sử dụng SQLite + sqlite-vec (đã thay thế ChromaDB): Giảm phụ thuộc, tối giản hóa stack kỹ thuật, phù hợp với yêu cầu local-first.
 
 - Tích hợp Self-Learning Loop: Khi phát hiện trùng lặp (cosine similarity > threshold), tự động tạo bản ghi experience để hệ thống không lặp lại xung đột.
 

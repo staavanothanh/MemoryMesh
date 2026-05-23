@@ -40,6 +40,6 @@ Có thể kết nối trực tiếp với bất kỳ provider nào tuân thủ �
 ## Hướng áp dụng vào MemoryMesh
 
 - **Sử dụng mem0 làm backend cho Memory Engine:** Thay vì tự viết toàn bộ `memory_manager.py`, tích hợp mem0 như một thư viện để xử lý lưu trữ và truy xuất. Cách này tiết kiệm 60-70% thời gian phát triển phần lõi.
-- **Tham khảo kiến trúc Multi-signal retrieval:** Kết hợp vector DB (ChromaDB hoặc sqlite-vec) + BM25 + entity graph để truy xuất.
+- **Tham khảo kiến trúc Multi-signal retrieval:** Kết hợp vector DB (sqlite-vec) + FTS5 + entity graph để truy xuất.
 - **Áp dụng Entity Linking:** Thêm bước trích xuất thực thể khi `add_memory`, lưu vào metadata để tăng độ chính xác khi `recall`.
 - **Tối ưu hóa LLM call:** Dùng cơ chế ADD-only extraction để giảm số lần gọi LLM trong pipeline bất đồng bộ.

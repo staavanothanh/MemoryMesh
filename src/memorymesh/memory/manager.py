@@ -271,12 +271,12 @@ class MemoryManager:
             return []
         ids = [r["id"] for r in fts_results]
         try:
-            chroma_data = await self.backend.get_with_embeddings_by_ids(ids)
-            chroma_map = {d["id"]: d for d in chroma_data}
+            enriched_data = await self.backend.get_with_embeddings_by_ids(ids)
+            data_map = {d["id"]: d for d in enriched_data}
             enriched = []
             for r in fts_results:
-                chroma = chroma_map.get(r["id"], {})
-                meta = chroma.get("metadata", {}) or {}
+                record = data_map.get(r["id"], {})
+                meta = record.get("metadata", {}) or {}
                 enriched.append({
                     **r,
                     "metadata": meta,

@@ -198,7 +198,7 @@ class TestEnrichFtsResults:
         assert enriched == []
 
     @pytest.mark.asyncio
-    async def test_handles_missing_chroma(self, memory_manager):
+    async def test_handles_missing_enrichment(self, memory_manager):
         with patch.object(memory_manager.backend, "get_with_embeddings_by_ids",
                           new=AsyncMock(return_value=[])):
             fts_results = [{"id": "nonexistent_id", "content": "test", "score": 1.0}]
@@ -207,9 +207,9 @@ class TestEnrichFtsResults:
             assert enriched[0]["metadata"] == {}
 
     @pytest.mark.asyncio
-    async def test_chroma_exception_graceful(self, memory_manager):
+    async def test_enrichment_exception_graceful(self, memory_manager):
         with patch.object(memory_manager.backend, "get_with_embeddings_by_ids",
-                          new=AsyncMock(side_effect=Exception("Chroma down"))):
+                          new=AsyncMock(side_effect=Exception("Enrichment failed"))):
             fts_results = [{"id": "m1", "content": "test", "score": 1.0}]
             enriched = await memory_manager._enrich_fts_results(fts_results, "test_user")
             assert len(enriched) == 1

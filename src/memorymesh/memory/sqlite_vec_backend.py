@@ -1,6 +1,6 @@
 """
 Single-DB backend: vector (sqlite-vec) + FTS5 + metadata in one SQLite file.
-Replaces ChromaMemoryBackend + FTSBackend + HybridBackend.
+Unified backend — vector (sqlite-vec), FTS5, and metadata in a single SQLite database.
 """
 import json
 import re
