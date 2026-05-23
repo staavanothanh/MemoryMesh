@@ -135,13 +135,7 @@ class SqliteVecBackend:
         await self._db.execute(
             "CREATE INDEX IF NOT EXISTS idx_mem_deleted ON memories(user_id, deleted)"
         )
-        # Table 2: vector ANN (sqlite-vec)
-        await self._db.execute("""
-            CREATE VIRTUAL TABLE IF NOT EXISTS vec_memories USING vec0(
-                memory_id TEXT PRIMARY KEY,
-                embedding FLOAT[384]
-            )
-        """)
+        # Table 2: vector ANN (sqlite-vec) — created lazily on first add() with correct DIM
         # Table 3: FTS5 full-text search
         await self._db.execute("""
             CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(
@@ -174,6 +168,39 @@ class SqliteVecBackend:
             END
         """)
 
+    async def _ensure_vec_table(self, dim: int):
+        """Lazily create vec0 table with the correct embedding dimension.
+
+        If the table already exists with a different dimension, drop and
+        recreate it to avoid dimension mismatch errors.
+        """
+        if self._db is None:
+            return
+        cursor = await self._db.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='vec_memories'"
+        )
+        row = await cursor.fetchone()
+        if row:
+            # Table exists — check if dimension matches
+            existing_sql = row["sql"]
+            expected = f"FLOAT[{dim}]"
+            if expected not in existing_sql:
+                logger.warning("vec_memories dimension mismatch: dropping and recreating (dim=%d)", dim)
+                await self._db.execute("DROP TABLE IF EXISTS vec_memories")
+                await self._db.execute(f"""
+                    CREATE VIRTUAL TABLE IF NOT EXISTS vec_memories USING vec0(
+                        memory_id TEXT PRIMARY KEY,
+                        embedding FLOAT[{dim}]
+                    )
+                """)
+        else:
+            await self._db.execute(f"""
+                CREATE VIRTUAL TABLE IF NOT EXISTS vec_memories USING vec0(
+                    memory_id TEXT PRIMARY KEY,
+                    embedding FLOAT[{dim}]
+                )
+            """)
+
     # ------------------------------------------------------------------
     # Core write — single ACID transaction
     # ------------------------------------------------------------------
@@ -197,6 +224,8 @@ class SqliteVecBackend:
         importance = meta.get("importance", 3)
         normalized = normalize_l2(embedding)
         vec_bytes = np.array(normalized, dtype=np.float32).tobytes()
+
+        await self._ensure_vec_table(len(embedding))
 
         async with TransactionContext(self._db):
             await self._db.execute(
@@ -342,6 +371,8 @@ class SqliteVecBackend:
         normalized = normalize_l2(embedding)
         vec_bytes = np.array(normalized, dtype=np.float32).tobytes()
         pool = max(top_k * 2, 10)
+
+        await self._ensure_vec_table(len(embedding))
 
         cursor = await self._db.execute(
             "SELECT memory_id, distance FROM vec_memories WHERE embedding MATCH ? AND k = ?",

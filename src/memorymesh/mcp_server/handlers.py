@@ -348,23 +348,25 @@ class ToolHandlers:
             if self.manager.config.session.auto_compact_on_end:
                 await self._compact_session(session_id, user_id)
             snapshot_text = await self._create_bootstrap_snapshot(session_id, user_id)
+            wp = await self._get_workspace_path()
+            cache_key = f"{user_id}:{wp}" if wp else user_id
             if snapshot_text:
-                wp = await self._get_workspace_path()
-                cache_key = f"{user_id}:{wp}" if wp else user_id
                 self._global_bootstrap_ram_cache[cache_key] = snapshot_text
-                # Pre-warm search cache cho session tiếp theo — chạy TRƯỚC khi close
-                try:
-                    results, _, _ = await self.manager.search_with_fallback(
-                        query="session summary important decisions next steps",
-                        top_k=5, user_id=user_id, workspace_path=wp,
-                        max_tokens=500,
-                    )
-                    if results:
-                        mem_summary = "\n".join(f"[MEM] {r['content'][:200]}" for r in results)
-                        self._global_bootstrap_ram_cache[cache_key] += f"\n\n{mem_summary}"
-                        self._recall_results_cache[cache_key] = results
-                except Exception:
-                    pass
+            # Pre-warm search cache cho session tiếp theo — chạy TRƯỚC khi close
+            # Chạy độc lập với snapshot_text để không mất pre-warm nếu LLM fail
+            try:
+                results, _, _ = await self.manager.search_with_fallback(
+                    query="session summary important decisions next steps",
+                    top_k=5, user_id=user_id, workspace_path=wp,
+                    max_tokens=500,
+                )
+                if results:
+                    mem_summary = "\n".join(f"[MEM] {r['content'][:200]}" for r in results)
+                    existing = self._global_bootstrap_ram_cache.get(cache_key, "")
+                    self._global_bootstrap_ram_cache[cache_key] = f"{existing}\n\nPre-computed:\n{mem_summary}" if existing else mem_summary
+                    self._recall_results_cache[cache_key] = results
+            except Exception:
+                pass
             await self._flush_fact_buffer()
             await self.session_store.end_session(session_id)
             _log_bg("Finalize", f"Session {session_id[:12]} finalized", emoji="")
@@ -382,7 +384,9 @@ class ToolHandlers:
             if results:
                 summary = "\n".join(f"- {r['content'][:200]}" for r in results[:5])
                 existing = self._global_bootstrap_ram_cache.get(cache_key, "")
-                self._global_bootstrap_ram_cache[cache_key] = existing + f"\n\nRecalled context:\n{summary}"
+                # Dedup: nếu "Recalled context:" đã tồn tại, thay thế nội dung
+                existing_clean = existing.split("\n\nRecalled context:")[0].strip()
+                self._global_bootstrap_ram_cache[cache_key] = existing_clean + f"\n\nRecalled context:\n{summary}" if existing_clean else f"Recalled context:\n{summary}"
                 self._recall_results_cache[cache_key] = results
         except Exception as e:
             logger.warning("Resume cache warm failed: %s", e)

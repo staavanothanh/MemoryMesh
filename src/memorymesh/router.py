@@ -1,6 +1,7 @@
 """Async client for 9Router with retry, fallback, and circuit breaker."""
 
 import asyncio
+import time
 import logging
 from typing import Optional
 import json
@@ -62,8 +63,12 @@ class RouterClient:
         return await self.call_llm(prompt)
 
     async def _call_llm_impl(self, prompt: str, model: Optional[str] = None) -> str:
+        # Auto-recovery: after 60s cooldown, allow one retry (half-open state)
         if self._failure_count >= 3:
-            raise LLMUnavailableError("Circuit breaker open: too many failures")
+            if time.time() - self._last_failure_time > 60:
+                self._failure_count = 2
+            else:
+                raise LLMUnavailableError("Circuit breaker open: too many failures")
 
         primary = model or self.config.default_model
         fallback = self.config.fallback_model
@@ -80,6 +85,7 @@ class RouterClient:
                     await asyncio.sleep(2 ** attempt)
 
         self._failure_count += 1
+        self._last_failure_time = time.time()
         if self._failure_count >= 3:
             raise LLMUnavailableError("Circuit breaker open: too many failures")
         raise last_error or RouterError(primary, self.config.max_retries, "Unknown error")

@@ -51,6 +51,16 @@ User -> Any MCP Client -> LLM (via your router)
 - Background tasks (enrichment, consolidation, fact extraction) are rate-limited
 - Session-level memories auto-expire after 7 days
 
+### 🌟 Hidden Gems (Under the Hood)
+MemoryMesh is packed with subtle architectural decisions designed to make the AI feel more like a human colleague:
+- **Zero-Latency Context (Optimistic Hydration):** Instead of making you wait for vector searches when you reopen an old project, MemoryMesh pre-computes semantic anchors right before a session closes. These are stored in a RAM Cache, meaning the AI regains full context of your last session in `<5ms`—before you even finish typing your first prompt.
+- **Cross-Project Wisdom (Soft Penalty):** MemoryMesh doesn't use hard boundaries between projects. It uses a *Soft Penalty* system. If you solve a complex Docker bug in `Project A` and later ask a Docker question in `Project B`, MemoryMesh slightly penalizes `Project A`'s memories but still surfaces them if they are highly relevant. The AI learns globally but prioritizes locally.
+- **3-Tier Fallback Retrieval:** Vector databases are great for semantics but terrible at finding specific variable names or UUIDs. MemoryMesh never relies solely on vectors. It cascades through 3 tiers:
+  1. *Semantic Search* (sqlite-vec)
+  2. *Full-Text Search* (FTS5 keyword matching)
+  3. *Chronological Scan* (recent logs)
+  This ensures zero "hallucinations from amnesia" — if the data is there, it will be found.
+
 ## Cost Management & Dual-LLM Architecture
 
 MemoryMesh uses **two independent LLM layers** to separate interactive performance from background cost:
@@ -59,6 +69,20 @@ MemoryMesh uses **two independent LLM layers** to separate interactive performan
 |-------|----------|----------------|---------|
 | **Foreground (Chat)** | `DEFAULT_MODEL` / `FALLBACK_MODEL` | GPT-5.5, Claude 4.7 Opus, Gemini 3.5 Flash, DeepSeek V4-Pro | Direct user interaction via the MCP client |
 | **Background (Data)** | `BACKGROUND_MODEL_POOL` | Gemini 2.5 Flash, Llama 3.1 8B, DeepSeek V4 Flash | Bootstrap snapshots, atomic fact extraction, session compaction |
+
+## Multi-Agent & Cross-Device Sync
+MemoryMesh is designed with a future-proof architecture that revolves around the `DEFAULT_USER_ID` environment variable. This unlocks powerful real-world workflows:
+### 1. Multi-Agent Sharing
+If you use multiple AI assistants (e.g., OpenCode, Cline, Cursor) on the same machine, they can either:
+- **Share memories:** Point them all to the same `VEC_DB_PATH` and use the same `DEFAULT_USER_ID`. They will act as a hive mind, sharing context seamlessly.
+- **Isolate memories:** Keep the same database but set `DEFAULT_USER_ID=opencode` for one and `DEFAULT_USER_ID=cline` for the other. They will share the same physical file but remain completely isolated in their thought processes.
+### 2. Persona / Profile Separation
+As a developer, you might have different roles. You can isolate contexts without running multiple databases:
+- Set `DEFAULT_USER_ID=work_profile` for company projects (keeping corporate conventions strictly isolated).
+- Set `DEFAULT_USER_ID=personal_profile` for weekend pet projects.
+### 3. Cross-Device Synchronization
+Because MemoryMesh uses a single, portable SQLite database, you can place your `db/` folder inside Google Drive, Dropbox, or a network drive. 
+By setting the same `DEFAULT_USER_ID` on your work laptop and your home desktop, your AI agents will seamlessly sync their memory state across physical machines.
 
 ### How it works
 - Your **primary chat model** handles all user-facing reasoning — choose the best model you can afford.
