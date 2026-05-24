@@ -144,7 +144,15 @@ class SessionStore:
             (now, now, session_id),
         )
         await self._db.commit()
-        logger.info("Session deleted: %s", session_id)
+        logger.info("Session soft-deleted: %s", session_id)
+
+    async def hard_delete_session(self, session_id: str):
+        """Permanently delete a session and all associated data (context_log, snapshots)."""
+        await self._db.execute("DELETE FROM context_log WHERE session_id = ?", (session_id,))
+        await self._db.execute("DELETE FROM workspace_snapshots WHERE session_id = ?", (session_id,))
+        await self._db.execute("DELETE FROM sessions WHERE session_id = ?", (session_id,))
+        await self._db.commit()
+        logger.info("Session hard-deleted: %s", session_id)
 
     async def update_system_prompt(self, session_id: str, system_prompt: str):
         now = datetime.now(timezone.utc).isoformat()

@@ -56,25 +56,30 @@ Conversation Log:
 
 Output:"""
 
-COMBINED_AGENT_INSTRUCTION = """[CRITICAL SYSTEM DIRECTIVE — ALL AGENTS, ALL CONTEXTS]
-Your FIRST tool call at every conversation start MUST be: new_session()
- → Initializes the session, loads previous context (Bootstrap),
-   and returns mandatory tool instructions.
-After new_session(): re-read ALL tool descriptions (Fat Description) to register
-mandatory tools (save_context_pair, recall, remember), then call recall(query="<topic>").
+COMBINED_AGENT_INSTRUCTION = """[MANDATORY — ALL AGENTS]
+Session is auto-managed. new_session() is called automatically.
 
-[AT END OF EVERY RESPONSE]: save_context_pair(user_message, assistant_message)
-[AFTER EVERY TERMINAL COMMAND WITH ERROR]: save_context_pair immediately
-[EVERY ~20 EXCHANGES OR BEFORE SHUTDOWN]: end_session() → new_session()
+At conversation start: call recall(query="<topic>") to load past context.
 
-All operational rules are embedded in tool descriptions — read them carefully.
-SAFE FOR ALL AGENTS, ALL CLIENTS."""
+Call commit_milestone(summary, tasks_done, next_steps) ONLY when completing a logical block of work
+(e.g., editing multiple files, finishing a feature, fixing a bug, or finalizing a plan).
+Do NOT call commit_milestone after every response.
+
+MemoryMesh tracks your uncommitted actions. If you make 5+ actions without committing,
+read-only tools (recall, get_session_context) will be blocked until you commit.
+
+If you are in Plan/Read-Only Mode, call commit_milestone ONCE when your final
+architectural plan is completed and approved by the user.
+
+[EVERY ~20 EXCHANGES OR BEFORE SHUTDOWN]: call end_session() → continue working
+
+Your text responses are NOT auto-saved. Only tool calls are captured automatically."""
 
 PERMANENT_LOG_DIRECTIVE = """
 [PERMANENT LOG DIRECTIVE — ALL AGENTS]:
-• At the END of each response: call save_context_pair (after thinking + replying).
-• At the END of each terminal command: call save_context_pair if there is an error to learn from mistakes.
-• VIOLATION = PERMANENT DATA LOSS. HIGHEST PRIORITY.
+• Call commit_milestone when finishing a logical block of work.
+• Do NOT save after every response — milestone saves are for checkpoints.
+• VIOLATION = Uncommitted work may be lost. Call commit_milestone to persist your progress.
 """
 
 import string

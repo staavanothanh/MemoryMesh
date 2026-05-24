@@ -59,7 +59,7 @@ graph TD
     end
 
     LLM -->|recall| MM
-    LLM -->|save_context_pair| FE[Atomic Fact Extraction]
+    LLM -->|commit_milestone| FE[Milestone Commit + Fact Extraction]
 ```
 
 **Thiết kế chính:**
@@ -167,7 +167,7 @@ MemoryMesh có thể tự động tải hướng dẫn và tài liệu vào đ�
 
 ### Cách hoạt động
 
-Khi `new_session()` được gọi, MemoryMesh quét nhiều nguồn theo thứ tự ưu tiên và **chèn nội dung vào đầu system prompt**, giúp model thấy hướng dẫn ngay từ lượt tương tác đầu tiên:
+Quản lý phiên **hoàn toàn tự động**. Khi công cụ đầu tiên được gọi (ví dụ: `recall`, `remember`), MemoryMesh sẽ tự động khôi phục phiên gần nhất cho workspace hiện tại hoặc tạo phiên mới nếu chưa có. MemoryMesh quét nhiều nguồn theo thứ tự ưu tiên và **chèn nội dung vào đầu system prompt**, giúp model thấy hướng dẫn ngay từ lượt tương tác đầu tiên:
 
 ```
 Tầng 1: File toàn cục của người dùng     ~/.config/memorymesh/session.md
@@ -182,9 +182,9 @@ Tạo một trong các file trên với nội dung như:
 ```markdown
 # Quy tắc Phiên
 
-- **LUÔN LUÔN** gọi `save_context_pair(user_message, assistant_message)` ở cuối MỌI phản hồi
-- Hành động đầu tiên: gọi `new_session()` sau đó `recall(query="<chủ đề>")`
-- VI PHẠM save_context_pair = mất dữ liệu vĩnh viễn
+- **Agent**: Dùng `commit_milestone(summary, tasks_done, next_steps)` khi hoàn thành một khối công việc logic (KHÔNG phải sau mỗi response).
+- MemoryMesh theo dõi số action chưa commit; 5+ action chưa commit sẽ chặn `recall` cho đến khi bạn gọi commit.
+- Bắt đầu: gọi `recall(query="<chủ đề>")` để tải ký ức liên quan (phiên được tự động quản lý)
 ```
 
 ### Đa người dùng & Đa thiết bị
@@ -207,19 +207,20 @@ Khi `SESSION_DOCS_SYNC_ENABLED=true` (mặc định), MemoryMesh cũng tự đ�
 docker compose -f docker/docker-compose.yml up -d
 ```
 
-## 15 Công cụ MCP
+## 16 Công cụ MCP
 
 | Công cụ | Phân loại Kiến trúc | Mục đích |
 |---------|---------------------|----------|
 | ![Core](https://img.shields.io/badge/-CORE-00f2fe?style=flat-square) `remember` | Ngữ nghĩa / Vector | Lưu ký ức với nội dung, thẻ (tags), độ quan trọng |
 | ![Core](https://img.shields.io/badge/-CORE-00f2fe?style=flat-square) `recall` | Hợp nhất RRF | Truy xuất ký ức liên quan nhất theo truy vấn ngữ nghĩa |
-| ![Core](https://img.shields.io/badge/-CORE-00f2fe?style=flat-square) `save_context_pair` | Trích xuất Sự kiện | Lưu trao đổi hội thoại, kích hoạt trích xuất sự kiện |
+| ![Core](https://img.shields.io/badge/-CORE-00f2fe?style=flat-square) `commit_milestone` | Checkpoint | **MỚI**: Commit một dấu mốc (summary, tasks_done, next_steps). Giải phóng dữ liệu con tin (hostage). Gọi khi hoàn thành khối công việc logic. |
 | ![Data](https://img.shields.io/badge/-DATA-9d4edd?style=flat-square) `forget` | SQLite Bền vững | Xóa mềm (lưu trữ) một ký ức |
 | ![Data](https://img.shields.io/badge/-DATA-9d4edd?style=flat-square) `archive_memory` | SQLite Bền vững | Di chuyển ký ức vào kho lưu trữ |
 | ![Data](https://img.shields.io/badge/-DATA-9d4edd?style=flat-square) `unarchive_memory` | SQLite Bền vững | Khôi phục ký ức đã lưu trữ |
 | ![Data](https://img.shields.io/badge/-DATA-9d4edd?style=flat-square) `list_memories` | SQLite Bền vững | Liệt kê ký ức chưa lưu trữ (phân trang) |
 | ![Data](https://img.shields.io/badge/-DATA-9d4edd?style=flat-square) `save_workspace_context` | SQLite Bền vững | Chụp nhanh trạng thái workspace |
-| ![Session](https://img.shields.io/badge/-SESSION-00ff66?style=flat-square) `new_session` | Vòng đời Phiên | Tạo phiên mới (đóng phiên hiện tại) |
+| ![Session](https://img.shields.io/badge/-SESSION-00ff66?style=flat-square) `new_session` | Vòng đời Phiên | Tự động gọi khi cần; gọi thủ công để tạo phiên mới |
+| ![Session](https://img.shields.io/badge/-SESSION-00ff66?style=flat-square) `delete_session` | Vòng đời Phiên | Xóa vĩnh viễn phiên + toàn bộ dữ liệu (vector memories, context logs, snapshots) |
 | ![Session](https://img.shields.io/badge/-SESSION-00ff66?style=flat-square) `resume_session` | Vòng đời Phiên | Khôi phục ngữ cảnh từ phiên trước |
 | ![Session](https://img.shields.io/badge/-SESSION-00ff66?style=flat-square) `save_system_prompt` | Vòng đời Phiên | Lưu system prompt vào phiên hiện tại |
 | ![Session](https://img.shields.io/badge/-SESSION-00ff66?style=flat-square) `list_sessions` | Vòng đời Phiên | Liệt kê các phiên trước đây |

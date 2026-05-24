@@ -1,6 +1,3 @@
-> **⚠️ CRITICAL: At conversation start, call `new_session()` FIRST before any other tool.**
-> **⚠️ CRITICAL: At end of EVERY response, call `save_context_pair(user_message, assistant_message)`.**
-
 # MemoryMesh — Long-term Memory MCP Server
 
 ## Project Identity
@@ -23,7 +20,7 @@ User Request ───────> LLM ─────────────�
                                                                   Tier 2: FTS keyword
                                                                   Tier 3: chronological
 
-Session End ─────────> Compaction ──> Create bootstrap snapshot
+Session End ─────────> Teardown Snapshot ──> Compaction ──> Bootstrap Snapshot
 ```
 
 - **Chat** goes directly from client to LLM, NOT through MemoryMesh
@@ -31,8 +28,9 @@ Session End ─────────> Compaction ──> Create bootstrap sna
 - **Bootstrap**: `end_session` creates a summary; `new_session` auto-injects it
 - **Dynamic Recall**: triggered by LLM's `recall` call, guarded by token budget
 - **Single-DB**: sqlite-vec for vector, FTS5 for keyword — all in one SQLite file
+- **Checkpoint Model**: Call `commit_milestone` when finishing a logical block of work. Action-based choke point blocks `recall` after 5+ uncommitted actions.
 
-## 15 MCP Tools
+## 16 MCP Tools
 
 | Tool | Purpose |
 |------|---------|
@@ -44,10 +42,11 @@ Session End ─────────> Compaction ──> Create bootstrap sna
 | `list_memories` | List non-archived memories (paginated) |
 | `ping` | Health check |
 | `save_system_prompt` | Save system prompt to current session |
-| `save_context_pair` | Save user+assistant exchange, trigger fact extraction |
+| **`commit_milestone`** | **Commit a checkpoint: summary, tasks_done, next_steps. Releases hostage data.** |
+| `save_context_pair` | DEPRECATED — use commit_milestone instead |
 | `list_sessions` | List past sessions |
 | `get_session_context` | View a session's full context log |
-| `new_session` | Create a fresh session (closes current one) |
+| `new_session` | Start a session |
 | `end_session` | End session (triggers compaction + fact buffer flush) |
 | `save_workspace_context` | Snapshot workspace files, git status, deps |
 | `resume_session` | Restore a past session's context |
@@ -60,13 +59,16 @@ Session End ─────────> Compaction ──> Create bootstrap sna
 4. **Background tasks**: Use `manager._create_tracked_task()` instead of raw `asyncio.create_task()`.
 5. **Rate-limiting**: All expensive background ops (consolidation 60s, fact resolution 120s, expiry 60s) are rate-limited per user.
 6. **Workspace isolation**: Memories tagged with `workspace_path`; hierarchical visibility.
-7. **Soft delete**: `forget` and `archive` mark `deleted=True`; use `unarchive_memory` to restore.
+7. **Soft delete**: `forget` and `archive` mark `deleted=True`; use `unarchive_memory` to restore. `delete_session` performs a permanent hard delete (vector + logs + session record).
 8. **Memory expiry**: Session-level memories older than `session_memory_ttl_days` (default 7) are auto-expired.
 9. **Fact batching**: Up to 3 conversation pairs are batched into a single LLM call.
 10. **Token budget**: Recall enforces configurable `token_budget` (default 1000).
 11. **Session tagging**: Memories tagged with `session:<id>` for cleanup on end_session.
-12. **Layer 2 auto-save**: All tool calls are auto-saved as session memories.
-13. **Layer 3 depth compaction**: Auto-compact when context log reaches 80% of threshold.
+12. **Action-based choke point**: 5+ uncommitted actions blocks `recall` until `commit_milestone` is called. READ_ONLY tools (recall, remember, ping, list*) do NOT count as actions.
+13. **Hostage pattern**: Blocked `recall` data is cached in the tracker; calling `commit_milestone` releases it instantly (Zero-Round-Trip).
+14. **Teardown hook**: Session end or shutdown flushes unsaved context as `[SESSION-FINAL-SNAPSHOT]`.
+15. **Hybrid auto-snapshot**: Idle > 60s with uncommitted actions triggers an auto-snapshot (low importance safety net).
+16. **Plan Mode compatible**: Plan mode never increments uncommitted_actions (no mutate tools), so choke point never triggers. Call `commit_milestone` once when plan is finalized.
 
 ## Data Storage
 

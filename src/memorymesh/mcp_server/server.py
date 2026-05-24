@@ -4,6 +4,7 @@ import os
 import signal
 import logging
 import time
+from typing import Optional
 from contextlib import asynccontextmanager
 
 from mcp.server import Server
@@ -24,7 +25,7 @@ from ..logging_ import setup_logging
 from ..prompts import COMBINED_AGENT_INSTRUCTION
 from ..embedder import prewarm_embedder
 from .tools import TOOLS
-from .handlers import ToolHandlers
+from .handlers import ToolHandlers, SemanticFilter
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +75,7 @@ class MemoryMeshServer:
         self.mcp_server = Server("memorymesh")
         self._shutdown_event = asyncio.Event()
         self._background_tasks: set[asyncio.Task] = set()
+        self._idle_flush_task: Optional[asyncio.Task] = None
         self._register_tools()
 
     def _init_options(self):
@@ -96,6 +98,7 @@ class MemoryMeshServer:
                 "list_memories": self.handlers.handle_list_memories,
                 "ping": self.handlers.handle_ping,
                 "save_system_prompt": self.handlers.handle_save_system_prompt,
+                "commit_milestone": self.handlers.handle_commit_milestone,
                 "save_context_pair": self.handlers.handle_save_context_pair,
                 "list_sessions": self.handlers.handle_list_sessions,
                 "get_session_context": self.handlers.handle_get_session_context,
@@ -110,8 +113,22 @@ class MemoryMeshServer:
             if not handler:
                 raise ValueError(f"Unknown tool: {name}")
 
+            # Detect client from MCP request context (per-connection, via contextvars)
+            client_name = ""
+            try:
+                ctx = self.mcp_server.request_context
+                client_caps = ctx.session.client_params
+                if client_caps and client_caps.client_info:
+                    client_name = client_caps.client_info.name or ""
+            except (LookupError, AttributeError):
+                pass
+
+            # Auto-init session if none active (skip for new_session itself to avoid recursion)
+            if name != "new_session":
+                await self.handlers.ensure_session(arguments)
+
             # Layer 2/3 tracking (must run before handler)
-            self.handlers._note_tool_call(name)
+            await self.handlers._note_tool_call(name, arguments)
 
             result = await handler(arguments)
 
@@ -122,9 +139,13 @@ class MemoryMeshServer:
                     self._safely_auto_save_tool(name, arguments, result)
                 )
 
-            reminder = self.handlers.consume_reminder()
-            text = reminder + json.dumps(result, ensure_ascii=False)
-            return [TextContent(type="text", text=text)]
+            # Build response content array
+            contents = [TextContent(
+                type="text",
+                text=json.dumps(result, ensure_ascii=False)
+            )]
+
+            return contents
 
     def _create_tracked_task(self, coro) -> asyncio.Task:
         task = asyncio.create_task(coro)
@@ -154,6 +175,8 @@ class MemoryMeshServer:
             )
             logger.info("Auto-created fresh session: %s", session_id)
             await self.handlers.set_session(session_id)
+        self.handlers.start_write_worker()
+        self._idle_flush_task = self._create_tracked_task(self.handlers._idle_flush_loop())
 
     async def _initialize_slow(self):
         """Slow background init: model-dependent tasks (auto-scan, auto-recall)."""
@@ -165,12 +188,57 @@ class MemoryMeshServer:
 
     async def _cleanup(self):
         logger.info("Shutting down...")
+
+        # TEARDOWN HOOK: flush unsaved context before shutdown
+        try:
+            await self.handlers._trigger_teardown_snapshot()
+        except Exception as e:
+            logger.warning("Teardown snapshot error: %s", e)
+
+        # Stop background tasks
+        await self.handlers.stop_write_worker()
+        try:
+            self._idle_flush_task.cancel()
+        except Exception:
+            pass
+
+        # Flush any pending trackers before shutdown (teardown already captured the main one)
+        try:
+            async with self.handlers._tracker_lock:
+                session_ids = list(self.handlers._trackers.keys())
+            for sid in session_ids:
+                async with self.handlers._tracker_lock:
+                    tracker = self.handlers._trackers.get(sid)
+                if tracker:
+                    snapshot = tracker.teardown_flush()
+                    if snapshot and SemanticFilter.is_valuable(snapshot):
+                        logger.info("Shutdown flush session %s", sid[:8])
+                        try:
+                            await self.manager.add_memory(
+                                text=snapshot,
+                                tags=["auto_save", "shutdown", f"session:{sid}"],
+                                importance=2,
+                                level="session",
+                                user_id=self.config.default_user_id,
+                            )
+                        except Exception as e:
+                            logger.warning("Shutdown flush write failed: %s", e)
+        except Exception as e:
+            logger.warning("Shutdown flush error: %s", e)
+
+        # Drain memory write queue
+        try:
+            while not self.handlers._write_queue.empty():
+                task = self.handlers._write_queue.get_nowait()
+                await self.manager.add_memory(**task)
+        except Exception:
+            pass
+
         try:
             current_id = await self.handlers.get_current_session_id()
             if current_id:
                 logger.info("Finalizing active session before shutdown: %s", current_id)
                 uid = self.config.default_user_id
-                # Use wait_for to prevent infinite hangs during forceful exits
                 await asyncio.wait_for(
                     self.handlers._finalize_session(current_id, uid),
                     timeout=30.0
@@ -179,7 +247,7 @@ class MemoryMeshServer:
             logger.warning("Shutdown finalization timed out (30s)")
         except Exception as e:
             logger.warning("Shutdown finalization failed: %s", e)
-            
+
         try:
             await self.backend.close()
         except Exception as e:
@@ -273,6 +341,10 @@ class MemoryMeshServer:
 
     async def _shutdown(self):
         logger.warning("Received shutdown signal, finalizing current session...")
+        try:
+            await self.handlers._trigger_teardown_snapshot()
+        except Exception:
+            pass
         try:
             current_id = await self.handlers.get_current_session_id()
             if current_id:

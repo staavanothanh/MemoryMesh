@@ -1,9 +1,15 @@
 from mcp.types import Tool
 
+MUTATE_TOOLS = frozenset({
+    "forget", "archive_memory", "unarchive_memory", "save_system_prompt",
+    "new_session", "end_session", "delete_session", "preserve_session_memories",
+    "save_workspace_context", "resume_session",
+})
+
 TOOLS = [
     Tool(
         name="remember",
-        description="Save important info (imp=5). Auto-enriches. |→save_context_pair",
+        description="Save important info (imp=5). Auto-enriches.",
         inputSchema={
             "type": "object",
             "properties": {
@@ -31,7 +37,7 @@ TOOLS = [
     ),
     Tool(
         name="recall",
-        description="Recall memories. Call after new_session. |→save_context_pair",
+        description="Recall memories by query. Call after new_session.",
         inputSchema={
             "type": "object",
             "properties": {
@@ -49,7 +55,7 @@ TOOLS = [
     ),
     Tool(
         name="forget",
-        description="Soft-delete a memory by ID. |→save_context_pair",
+        description="Soft-delete a memory by ID.",
         inputSchema={
             "type": "object",
             "properties": {
@@ -60,7 +66,7 @@ TOOLS = [
     ),
     Tool(
         name="archive_memory",
-        description="Archive a memory (soft delete). |→save_context_pair",
+        description="Archive a memory (soft delete).",
         inputSchema={
             "type": "object",
             "properties": {
@@ -71,7 +77,7 @@ TOOLS = [
     ),
     Tool(
         name="unarchive_memory",
-        description="Restore an archived memory. |→save_context_pair",
+        description="Restore an archived memory.",
         inputSchema={
             "type": "object",
             "properties": {
@@ -82,7 +88,7 @@ TOOLS = [
     ),
     Tool(
         name="list_memories",
-        description="List user memories (paginated). |→save_context_pair",
+        description="List user memories (paginated).",
         inputSchema={
             "type": "object",
             "properties": {
@@ -93,12 +99,12 @@ TOOLS = [
     ),
     Tool(
         name="ping",
-        description="Health check. |→save_context_pair",
+        description="Health check.",
         inputSchema={"type": "object", "properties": {}},
     ),
     Tool(
         name="save_system_prompt",
-        description="Save system prompt for session. |→save_context_pair",
+        description="Save system prompt for session.",
         inputSchema={
             "type": "object",
             "properties": {
@@ -108,8 +114,21 @@ TOOLS = [
         },
     ),
     Tool(
+        name="commit_milestone",
+        description="Commit a milestone: summarize completed work, current state, and next steps. Call ONLY when finishing a logical block of work (e.g., multiple edits, a feature, a bug fix). Do NOT call after every response. Releases any held search results.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "summary": {"type": "string", "description": "Brief summary (1-2 sentences) of what was accomplished"},
+                "tasks_done": {"type": "string", "description": "Files changed, bugs fixed, or features completed"},
+                "next_steps": {"type": "string", "description": "Planned next steps — what to work on next"}
+            },
+            "required": ["summary", "tasks_done", "next_steps"],
+        },
+    ),
+    Tool(
         name="save_context_pair",
-        description="⚠️ MANDATORY after EVERY response. Save user+assistant. |→save_context_pair",
+        description="DEPRECATED — use commit_milestone instead. Saves a user+assistant exchange (auto-mapped to commit_milestone).",
         inputSchema={
             "type": "object",
             "properties": {
@@ -121,7 +140,7 @@ TOOLS = [
     ),
     Tool(
         name="list_sessions",
-        description="List saved sessions. |→save_context_pair",
+        description="List saved sessions.",
         inputSchema={
             "type": "object",
             "properties": {
@@ -131,7 +150,7 @@ TOOLS = [
     ),
     Tool(
         name="get_session_context",
-        description="Get full context of old session. |→save_context_pair",
+        description="Get full context of old session.",
         inputSchema={
             "type": "object",
             "properties": {
@@ -143,7 +162,7 @@ TOOLS = [
     ),
     Tool(
         name="new_session",
-        description="⚠️ CALL FIRST. Create new session, close old. |→save_context_pair",
+        description="Create a new session. Call once at conversation start. After calling, call commit_milestone when logical work blocks complete. Your text responses are not auto-captured.",
         inputSchema={
             "type": "object",
             "properties": {
@@ -154,7 +173,7 @@ TOOLS = [
     ),
     Tool(
         name="end_session",
-        description="End session, compress, flush buffer. |→save_context_pair",
+        description="End session, compress, flush buffer.",
         inputSchema={
             "type": "object",
             "properties": {
@@ -164,7 +183,7 @@ TOOLS = [
     ),
     Tool(
         name="save_workspace_context",
-        description="Snapshot workspace state. |→save_context_pair",
+        description="Snapshot workspace state.",
         inputSchema={
             "type": "object",
             "properties": {
@@ -174,7 +193,7 @@ TOOLS = [
     ),
     Tool(
         name="delete_session",
-        description="Delete session + its memories. |→save_context_pair",
+        description="Delete session + its memories.",
         inputSchema={
             "type": "object",
             "properties": {
@@ -184,7 +203,7 @@ TOOLS = [
     ),
     Tool(
         name="preserve_session_memories",
-        description="Scan session, promote key memories. |→save_context_pair",
+        description="Scan session, promote key memories.",
         inputSchema={
             "type": "object",
             "properties": {
@@ -194,7 +213,7 @@ TOOLS = [
     ),
     Tool(
         name="resume_session",
-        description="Restore old session context. |→save_context_pair",
+        description="Restore old session context. Auto-called when resuming previous work.",
         inputSchema={
             "type": "object",
             "properties": {

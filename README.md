@@ -59,7 +59,7 @@ graph TD
     end
 
     LLM -->|recall| MM
-    LLM -->|save_context_pair| FE[Atomic Fact Extraction]
+    LLM -->|commit_milestone| FE[Milestone Commit + Fact Extraction]
 ```
 
 **Key design:**
@@ -168,7 +168,7 @@ MemoryMesh can auto-load instructions and documentation at the start of every se
 
 ### How it works
 
-When `new_session()` is called, MemoryMesh scans multiple sources in priority order and **prepends the content to the system prompt**, so the model sees the instructions from the very first turn:
+Session management is **fully automatic**. On first tool call (e.g., `recall`, `remember`), MemoryMesh either resumes the most recent ended session for the current workspace or creates a fresh one. MemoryMesh scans multiple sources in priority order and **prepends the content to the system prompt**, so the model sees the instructions from the very first turn:
 
 ```
 Tier 1: Global user file           ~/.config/memorymesh/session.md
@@ -183,9 +183,9 @@ Create any of the files above with content like:
 ```markdown
 # Session Rules
 
-- **ALWAYS** call `save_context_pair(user_message, assistant_message)` at the end of EVERY response
-- First action: call `new_session()` then `recall(query="<topic>")`
-- VIOLATION of save_context_pair = permanent data loss
+- **Agent**: Use `commit_milestone(summary, tasks_done, next_steps)` when finishing a logical block of work (NOT after every response).
+- MemoryMesh tracks your uncommitted actions; 5+ uncommitted actions blocks `recall` until you commit.
+- At start: call `recall(query="<topic>")` to load relevant memories (session is auto-managed)
 ```
 
 ### Multi-User & Multi-Device
@@ -208,19 +208,20 @@ When `SESSION_DOCS_SYNC_ENABLED=true` (default), MemoryMesh also reads your proj
 docker compose -f docker/docker-compose.yml up -d
 ```
 
-## 15 MCP Tools
+## 16 MCP Tools
 
 | Tool | Architecture Category | Purpose |
 |------|----------------------|---------|
 | ![Core](https://img.shields.io/badge/-CORE-00f2fe?style=flat-square) `remember` | Semantic / Vector | Save a memory with content, tags, importance |
 | ![Core](https://img.shields.io/badge/-CORE-00f2fe?style=flat-square) `recall` | Hybrid RRF Fusion | Retrieve top relevant memories by semantic query |
-| ![Core](https://img.shields.io/badge/-CORE-00f2fe?style=flat-square) `save_context_pair` | Atomic Fact Extraction | Save conversation exchange, trigger fact extraction |
+| ![Core](https://img.shields.io/badge/-CORE-00f2fe?style=flat-square) `commit_milestone` | Checkpoint | **NEW**: Commit a milestone (summary, tasks_done, next_steps). Releases hostage data. Call when finishing a logical block of work. |
 | ![Data](https://img.shields.io/badge/-DATA-9d4edd?style=flat-square) `forget` | SQLite Persistent | Soft-delete (archive) a memory |
 | ![Data](https://img.shields.io/badge/-DATA-9d4edd?style=flat-square) `archive_memory` | SQLite Persistent | Move a memory to archive |
 | ![Data](https://img.shields.io/badge/-DATA-9d4edd?style=flat-square) `unarchive_memory` | SQLite Persistent | Restore an archived memory |
 | ![Data](https://img.shields.io/badge/-DATA-9d4edd?style=flat-square) `list_memories` | SQLite Persistent | List non-archived memories (paginated) |
 | ![Data](https://img.shields.io/badge/-DATA-9d4edd?style=flat-square) `save_workspace_context` | SQLite Persistent | Snapshot workspace state |
-| ![Session](https://img.shields.io/badge/-SESSION-00ff66?style=flat-square) `new_session` | Session Lifecycle | Create a fresh session (closes current) |
+| ![Session](https://img.shields.io/badge/-SESSION-00ff66?style=flat-square) `new_session` | Session Lifecycle | Auto-called if needed; explicit call forces fresh session |
+| ![Session](https://img.shields.io/badge/-SESSION-00ff66?style=flat-square) `delete_session` | Session Lifecycle | Permanently delete session + all data (vector memories, context logs, snapshots) |
 | ![Session](https://img.shields.io/badge/-SESSION-00ff66?style=flat-square) `resume_session` | Session Lifecycle | Restore context from a past session |
 | ![Session](https://img.shields.io/badge/-SESSION-00ff66?style=flat-square) `save_system_prompt` | Session Lifecycle | Save system prompt to current session |
 | ![Session](https://img.shields.io/badge/-SESSION-00ff66?style=flat-square) `list_sessions` | Session Lifecycle | List past sessions |

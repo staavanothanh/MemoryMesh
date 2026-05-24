@@ -538,7 +538,7 @@ class SqliteVecBackend:
             cursor = await self._db.execute(
                 """SELECT m.id FROM memories m, json_each(json_extract(m.metadata_json, '$.tags'))
                WHERE m.user_id = ? AND json_each.value = ? AND m.deleted = 0
-               ORDER BY rowid DESC""",
+               ORDER BY m.rowid DESC""",
                 (user_id, tag),
             )
             ids = [r[0] for r in await cursor.fetchall()]

@@ -3,7 +3,9 @@ import asyncio
 import time
 import os
 import logging
-from typing import Optional, List
+from contextvars import ContextVar
+from typing import Optional, List, Any
+from cachetools import TTLCache
 from ..hooks import hooks as global_hooks
 from ..memory.manager import MemoryManager
 from ..memory.session_store import SessionStore
@@ -12,6 +14,9 @@ from ..scanner import CodebaseScanner
 from ..errors import MemoryMeshError
 from ..utils.json_parser import clean_and_parse_llm_json
 from ..prompts import COMBINED_AGENT_INSTRUCTION, PERMANENT_LOG_DIRECTIVE, BOOTSTRAP_SNAPSHOT_PROMPT
+
+_session_var: ContextVar[str] = ContextVar('_session_var', default='')
+_client_name_var: ContextVar[str] = ContextVar('_client_name_var', default='')
 
 _ERROR_PRESERVE_KEYWORDS = frozenset({
     "fix", "bug", "error", "crash", "failure", "fail", "hotfix", "patch",
@@ -30,6 +35,95 @@ def _log_bg(label: str, msg: str, emoji: str = ""):
 
 logger = logging.getLogger(__name__)
 
+
+class SemanticFilter:
+    _NOISE = frozenset({
+        "hello", "hi", "thanks", "thank you", "ok", "okay", "sure", "got it",
+        "cảm ơn", "được", "vâng", "ừ", "hiểu rồi", "dạ", "vâng ạ",
+    })
+
+    @staticmethod
+    def is_valuable(content: str) -> bool:
+        if not content or len(content.strip()) < 20:
+            return False
+        return content.strip().lower() not in SemanticFilter._NOISE
+
+
+class ConversationTracker:
+    CHOKE_THRESHOLD = 5
+    READ_ONLY_TOOLS = frozenset({
+        "recall", "remember", "list_memories", "ping",
+        "list_sessions", "get_session_context",
+    })
+
+    def __init__(self, session_id: str):
+        self.session_id = session_id
+        self._uncommitted_actions: int = 0
+        self._hostage_data: Optional[Any] = None
+        self._tool_footprints: list[str] = []
+        self._last_activity: float = time.monotonic()
+        self._has_unsaved_context: bool = False
+
+    def record_tool_call(self, name: str, args: dict):
+        self._last_activity = time.monotonic()
+        self._has_unsaved_context = True
+
+        query = args.get("query") or args.get("content") or args.get("user_message") or ""
+        if query and name in ("recall", "remember", "commit_milestone"):
+            self._tool_footprints.append(f"[{name}:{str(query)[:50]}]")
+        else:
+            self._tool_footprints.append(f"[{name}]")
+
+        if name not in self.READ_ONLY_TOOLS and name != "commit_milestone":
+            self._uncommitted_actions += 1
+
+    def on_milestone_commit(self):
+        self._uncommitted_actions = 0
+        self._has_unsaved_context = False
+        self._tool_footprints.clear()
+
+    def engage_choke_point(self, data_to_hold: Any) -> str:
+        self._hostage_data = data_to_hold
+        return (
+            "🛑 CHOKE-POINT ENGAGED: Your working memory is overloaded "
+            f"({self._uncommitted_actions} uncommitted actions). "
+            "I have the data you requested, but you MUST call `commit_milestone` first. "
+            "Summarize your completed tasks now, and I will release the data."
+        )
+
+    def resolve_milestone(self) -> Optional[Any]:
+        self._uncommitted_actions = 0
+        self._has_unsaved_context = False
+        self._tool_footprints.clear()
+        released = self._hostage_data
+        self._hostage_data = None
+        return released
+
+    def should_flush(self, idle_threshold: float = 60.0) -> bool:
+        idle = time.monotonic() - self._last_activity > idle_threshold
+        return idle and self._uncommitted_actions > 0
+
+    def flush(self) -> str:
+        footprint = " → ".join(self._tool_footprints) if self._tool_footprints else "[no tools]"
+        self._tool_footprints.clear()
+        return (
+            f"[AUTO-SNAPSHOT] Uncommitted work (idle timeout). "
+            f"Tool sequence: {footprint}"
+        )
+
+    def teardown_flush(self) -> Optional[str]:
+        if not self._has_unsaved_context and self._uncommitted_actions == 0:
+            return None
+        footprint = " → ".join(self._tool_footprints) if self._tool_footprints else "[no tools]"
+        self._has_unsaved_context = False
+        self._tool_footprints.clear()
+        self._uncommitted_actions = 0
+        return (
+            f"[SESSION-FINAL-SNAPSHOT] Session ended with unsaved context. "
+            f"Tool sequence: {footprint}"
+        )
+
+
 class ToolHandlers:
     _MAX_BATCH_SIZE = 3
     _BOOTSTRAP_QUERIES = [
@@ -37,21 +131,33 @@ class ToolHandlers:
         "what did we do last session discussion topic",
     ]
 
-    _READ_ONLY_TOOLS = frozenset({"ping", "list_sessions", "list_memories", "get_session_context"})
+    @property
+    def _current_session_id(self):
+        val = _session_var.get()
+        return val if val else self._current_session_id_fallback
+
+    @_current_session_id.setter
+    def _current_session_id(self, value):
+        _session_var.set(value)
+        self._current_session_id_fallback = value
 
     def __init__(self, manager: MemoryManager, session_store: SessionStore):
         self.manager = manager
         self.session_store = session_store
-        self._current_session_id: str = ""
+        self._current_session_id_fallback = ""
         self._cached_workspace = None
         self._exchange_unsaved: bool = False
-        self._reminder_count: int = 3
+        self._reminder_count: int = 0
         self._fact_extractor = FactExtractor(manager.config, manager.router)
         self._fact_batch_buffer: list[str] = []
         self._fact_batch_lock = asyncio.Lock()
         self._global_bootstrap_ram_cache: dict[str, str] = {}
         self._recall_results_cache: dict[str, list] = {}
         self._last_depth_check_time: float = 0.0
+        self._trackers: TTLCache = TTLCache(maxsize=500, ttl=7200)
+        self._tracker_lock = asyncio.Lock()
+        self._write_queue: asyncio.Queue = asyncio.Queue(maxsize=100)
+        self._write_worker_task: Optional[asyncio.Task] = None
 
     async def set_session(self, session_id: str):
         self._current_session_id = session_id
@@ -61,10 +167,83 @@ class ToolHandlers:
         return self._current_session_id
 
     def consume_reminder(self) -> str:
-        if self._reminder_count > 0:
-            self._reminder_count -= 1
-            return "⚠️ Then call save_context_pair(user_msg, asst_msg)\n"
         return ""
+
+    async def _get_tracker(self, session_id: str) -> ConversationTracker:
+        async with self._tracker_lock:
+            if session_id not in self._trackers:
+                self._trackers[session_id] = ConversationTracker(session_id)
+            return self._trackers[session_id]
+
+    async def _record_tool_call(self, session_id: str, name: str, args: dict):
+        if not session_id:
+            return
+        try:
+            tracker = await self._get_tracker(session_id)
+            tracker.record_tool_call(name, args)
+        except Exception:
+            pass
+
+    async def _on_milestone_commit(self, session_id: str):
+        if not session_id:
+            return
+        try:
+            tracker = await self._get_tracker(session_id)
+            tracker.on_milestone_commit()
+        except Exception:
+            pass
+
+    def start_write_worker(self):
+        if self._write_worker_task is None:
+            self._write_worker_task = asyncio.create_task(self._write_worker())
+
+    async def stop_write_worker(self):
+        if self._write_worker_task:
+            self._write_worker_task.cancel()
+            try:
+                await self._write_worker_task
+            except asyncio.CancelledError:
+                pass
+            self._write_worker_task = None
+
+    async def _write_worker(self):
+        while True:
+            try:
+                task = await self._write_queue.get()
+                await self.manager.add_memory(**task)
+                self._write_queue.task_done()
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error("Write worker error: %s", e)
+
+    async def _idle_flush_loop(self):
+        while True:
+            await asyncio.sleep(15)
+            try:
+                async with self._tracker_lock:
+                    session_ids = list(self._trackers.keys())
+                for sid in session_ids:
+                    async with self._tracker_lock:
+                        tracker = self._trackers.get(sid)
+                    if tracker and tracker.should_flush(60.0):
+                        snapshot_text = tracker.flush()
+                        logger.warning("Idle flush session %s — auto-snapshot", sid[:8])
+                        if SemanticFilter.is_valuable(snapshot_text):
+                            try:
+                                self._write_queue.put_nowait({
+                                    "text": snapshot_text,
+                                    "tags": ["auto_save", "auto_snapshot", f"session:{sid}"],
+                                    "importance": 2,
+                                    "level": "session",
+                                    "user_id": self.manager.config.default_user_id,
+                                })
+                            except asyncio.QueueFull:
+                                logger.warning("Idle flush queue full, dropping session %s", sid[:8])
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error("Idle flush loop error: %s", e)
 
     async def _get_workspace_path(self) -> str:
         if self._cached_workspace is None and self._current_session_id:
@@ -74,6 +253,39 @@ class ToolHandlers:
             else:
                 self._cached_workspace = ""
         return self._cached_workspace or ""
+
+    async def ensure_session(self, args: dict) -> bool:
+        """Auto-resume or create a session if none active. Returns True if initialized."""
+        if self._current_session_id:
+            session = await self.session_store.get_session(self._current_session_id)
+            if session and session.get("status") == "active":
+                return False
+
+        uid = args.get("user_id", self.manager.config.default_user_id)
+        wp = args.get("workspace_path", "")
+
+        if wp:
+            try:
+                sessions = await self.session_store.list_sessions(
+                    uid, limit=5, status="ended", include_deleted=False
+                )
+                for s in sessions:
+                    if s.get("workspace_path", "") == wp:
+                        sid = s["session_id"]
+                        self._current_session_id = sid
+                        self._cached_workspace = None
+                        asyncio.create_task(self._warm_resume_cache(sid, uid, wp))
+                        _log_bg("AutoSession", f"Resumed ended session {sid[:8]} for {wp}", emoji="")
+                        return True
+            except Exception:
+                pass
+
+        await self.handle_new_session({
+            "user_id": uid,
+            "workspace_path": wp,
+            "system_prompt": "",
+        })
+        return True
 
     async def _log_context(self, role: str, content: str, tool_name: str = "", tool_args: str = ""):
         if self._current_session_id:
@@ -107,60 +319,94 @@ class ToolHandlers:
         if not self._current_session_id:
             return
         try:
-            user_text = args.get("query") or args.get("content") or args.get("user_message") or ""
             session_tag = self._session_tag()
-            if user_text:
-                combined = f"[{tool_name.upper()}] User: {user_text[:300]}"
-                tags = ["conversation", "session", "auto_save", tool_name, session_tag]
-            else:
-                combined = json.dumps({"tool": tool_name, "args": args}, ensure_ascii=False)[:300]
-                tags = ["conversation", "session", "auto_save", tool_name, session_tag]
-            await self.manager.add_memory(
-                text=combined,
-                tags=tags,
-                importance=4 if user_text else 3,
-                level="session",
-                user_id=args.get("user_id", self.manager.config.default_user_id),
-                workspace_path=await self._get_workspace_path(),
-            )
-            await self._log_context("assistant", combined, tool_name, str(args))
+            match tool_name:
+                case "remember":
+                    content = args.get("content", "")
+                    text = f"[DECISION] {content[:300]}" if content else None
+                    imp = 4
+                case "recall":
+                    query = args.get("query", "")
+                    count = len(result.get("data", [])) if isinstance(result, dict) else 0
+                    text = f"[RECALL] '{query[:100]}' → {count} results" if query else None
+                    imp = 2
+                case "commit_milestone":
+                    summary = args.get("summary", "")
+                    tasks = args.get("tasks_done", "")
+                    text = f"[MILESTONE] {summary[:100]} | Tasks: {tasks[:150]}" if summary else "[MILESTONE]"
+                    imp = 4
+                case "new_session":
+                    wp = args.get("workspace_path", "")
+                    text = f"[SESSION_START] workspace={wp}" if wp else "[SESSION_START]"
+                    imp = 3
+                case "end_session":
+                    text = "[SESSION_END]"
+                    imp = 3
+                case "save_workspace_context":
+                    text = "[WORKSPACE_SNAPSHOT]"
+                    imp = 3
+                case "delete_session":
+                    text = "[SESSION_DELETED]"
+                    imp = 3
+                case "preserve_session_memories":
+                    text = "[PRESERVE_MEMORIES]"
+                    imp = 3
+                case "resume_session":
+                    sid = args.get("session_id", "")
+                    text = f"[RESUME_SESSION] {sid[:8]}" if sid else "[RESUME_SESSION]"
+                    imp = 3
+                case _:
+                    user_text = (args.get("query") or args.get("content")
+                                 or args.get("user_message") or "")
+                    text = f"[{tool_name.upper()}] {user_text[:200]}" if user_text else None
+                    imp = 2
+
+            if not text or not SemanticFilter.is_valuable(text):
+                return
+
+            await self._write_queue.put_nowait({
+                "text": text,
+                "tags": ["auto_save", tool_name, session_tag],
+                "importance": imp,
+                "level": "session",
+                "user_id": args.get("user_id", self.manager.config.default_user_id),
+                "workspace_path": await self._get_workspace_path(),
+            })
+        except asyncio.QueueFull:
+            logger.warning("Write queue full, dropping auto_save for %s", tool_name)
         except Exception as e:
             logger.warning("save_auto_tool_context failed: %s", e)
 
-    def _note_tool_call(self, tool_name: str):
-        if tool_name in self._READ_ONLY_TOOLS:
-            return
-        if tool_name == "save_context_pair":
-            self._exchange_unsaved = False
-        elif tool_name not in ("recall", "end_session"):
-            self._exchange_unsaved = True
+    async def _note_tool_call(self, tool_name: str, arguments: dict):
+        session_id = self._current_session_id
+        if session_id and tool_name != "commit_milestone":
+            await self._record_tool_call(session_id, tool_name, arguments)
 
         now = time.monotonic()
         if now - self._last_depth_check_time >= 10.0:
             self._last_depth_check_time = now
             asyncio.create_task(self._layer3_depth_check())
 
-    async def _trigger_layer2(self):
+    async def _trigger_teardown_snapshot(self):
+        """Flush tracker's unsaved context to DB at session end or disconnect."""
         if not self._current_session_id:
             return
         try:
-            recent = await self.session_store.get_context_log(self._current_session_id, limit=10)
-            summary_lines = []
-            for entry in recent[-5:]:
-                summary_lines.append(f"[{entry['role']}] {entry.get('content', '')[:200]}")
-            context_summary = "\n".join(summary_lines)
-            await self.manager.add_memory(
-                text=f"[AUTO_SAVE:LAYER2_MISSED_SAVE_CONTEXT_PAIR]\nUnsaved exchange detected. Recent context:\n{context_summary}",
-                tags=["conversation", "session", "auto_save", "layer2", self._session_tag()],
-                importance=4,
-                level="session",
-                user_id=self.manager.config.default_user_id,
-                workspace_path=await self._get_workspace_path(),
-            )
-            await self._log_context("assistant", "Layer 2 auto-save triggered (missed save_context_pair)", "auto_save_layer2")
-            logger.info("Layer 2 triggered for session %s", self._current_session_id[:8])
+            tracker = await self._get_tracker(self._current_session_id)
+            snapshot_text = tracker.teardown_flush()
+            if snapshot_text and SemanticFilter.is_valuable(snapshot_text):
+                await self.manager.add_memory(
+                    text=snapshot_text,
+                    tags=["auto_save", "session_final", "teardown", self._session_tag()],
+                    importance=3,
+                    level="session",
+                    user_id=self.manager.config.default_user_id,
+                    workspace_path=await self._get_workspace_path(),
+                )
+                await self._log_context("assistant", snapshot_text, "auto_save_teardown")
+                logger.info("Teardown snapshot saved for session %s", self._current_session_id[:8])
         except Exception as e:
-            logger.warning("Layer 2 auto-save failed: %s", e)
+            logger.warning("Teardown snapshot failed: %s", e)
 
     async def _layer3_depth_check(self):
         if not self._current_session_id:
@@ -393,10 +639,6 @@ class ToolHandlers:
             return {"status": "error", "error": str(e)}
 
     async def handle_recall(self, args: dict) -> dict:
-        if self._exchange_unsaved:
-            self._exchange_unsaved = False
-            asyncio.create_task(self._trigger_layer2())
-
         wp = args.get("workspace_path") or await self._get_workspace_path()
         uid = args.get("user_id", self.manager.config.default_user_id)
         cache_key = f"{uid}:{wp}" if wp else uid
@@ -437,6 +679,19 @@ class ToolHandlers:
                             break
                 except Exception:
                     pass
+
+            # CHOKE-POINT: Block recall if too many uncommitted actions
+            session_id = self._current_session_id
+            if session_id:
+                tracker = await self._get_tracker(session_id)
+                if tracker._uncommitted_actions >= ConversationTracker.CHOKE_THRESHOLD:
+                    warning_msg = tracker.engage_choke_point(results)
+                    return {
+                        "status": "success",
+                        "data": [],
+                        "formatted": warning_msg,
+                        "meta": {"tier": "choked", "count": 0},
+                    }
 
             formatted = []
             if bootstrap_text:
@@ -544,35 +799,74 @@ class ToolHandlers:
             logger.error("Save system prompt failed: %s", e)
             return {"status": "error", "error": str(e)}
 
-    async def handle_save_context_pair(self, args: dict) -> dict:
+    async def handle_commit_milestone(self, args: dict) -> dict:
         try:
             user_id = args.get("user_id", self.manager.config.default_user_id)
-            user_msg = args["user_message"]
-            asst_msg = args["assistant_message"]
-            combined = f"User: {user_msg}\nAssistant: {asst_msg}"
-            await self._log_context("user", user_msg)
-            await self._log_context("assistant", asst_msg)
+            summary = args.get("summary", "")
+            tasks_done = args.get("tasks_done", "")
+            next_steps = args.get("next_steps", "")
+            combined = f"[Milestone] Summary: {summary}\nTasks: {tasks_done}\nNext: {next_steps}"
+            await self._log_context("user", summary)
+            await self._log_context("assistant", f"Milestone committed: {tasks_done[:200]}")
 
-            # Narrative thread — preserves full exchange for chronological recall
-            narrative_id = await self.manager.add_memory(
+            # Save as milestone memory with high importance
+            milestone_id = await self.manager.add_memory(
                 text=combined,
-                tags=["narrative_thread", "conversation", "session", self._session_tag()],
-                importance=3,
+                tags=["milestone", "narrative_thread", "checkpoint", self._session_tag()],
+                importance=4,
                 level="session",
                 user_id=user_id,
                 workspace_path=await self._get_workspace_path(),
             )
 
-            # Layer 1: mark exchange as saved
-            self._exchange_unsaved = False
+            # Resolve tracker: reset actions + release hostage data
+            released_data = None
+            session_id = self._current_session_id
+            if session_id:
+                try:
+                    tracker = await self._get_tracker(session_id)
+                    released_data = tracker.resolve_milestone()
+                except Exception:
+                    pass
 
-            # Extract atomic facts in background (non-blocking)
+            # Extract atomic facts in background
             if self.manager.config.session.auto_extract_facts:
                 asyncio.create_task(self._extract_and_save_facts(combined, user_id))
 
-            return {"status": "success", "data": {"narrative_id": narrative_id, "session_id": self._current_session_id}}
+            response_text = f"✅ Milestone committed. (ID: {milestone_id[:12]})"
+            if released_data:
+                response_text += f"\n\n🔓 [HOSTAGE RELEASED] Here is the data you requested earlier:\n{released_data}"
+
+            return {"status": "success", "data": {"milestone_id": milestone_id, "session_id": session_id, "message": response_text}}
         except MemoryMeshError as e:
-            logger.error("Save context pair failed: %s", e)
+            logger.error("Commit milestone failed: %s", e)
+            return {"status": "error", "error": str(e)}
+
+    async def handle_save_context_pair(self, args: dict) -> dict:
+        """DEPRECATED: Auto-maps to commit_milestone for backward compatibility."""
+        try:
+            user_id = args.get("user_id", self.manager.config.default_user_id)
+            user_msg = args.get("user_message", "")
+            asst_msg = args.get("assistant_message", "")
+            await self._log_context("user", user_msg)
+            await self._log_context("assistant", f"[LEGACY SAVE] {asst_msg[:200]}")
+
+            mapped_args = {
+                "summary": "Legacy auto-mapped commit",
+                "tasks_done": asst_msg[:300],
+                "next_steps": "Unknown (Legacy mode)",
+                "user_id": user_id,
+            }
+            result = await self.handle_commit_milestone(mapped_args)
+            if result.get("status") == "success":
+                result["data"]["message"] = (
+                    "✅ Saved via legacy tool. "
+                    "⚠️ DEPRECATION: `save_context_pair` is replaced by `commit_milestone`. "
+                    "Use `commit_milestone(summary, tasks_done, next_steps)` instead."
+                )
+            return result
+        except Exception as e:
+            logger.error("Legacy save_context_pair failed: %s", e)
             return {"status": "error", "error": str(e)}
 
     async def handle_list_sessions(self, args: dict) -> dict:
@@ -841,6 +1135,50 @@ class ToolHandlers:
         if saved:
             _log_bg("SessionStart", f"Synced {saved} doc file(s)", emoji="")
 
+    async def _bg_new_session_tasks(self, user_id: str, workspace_path: str):
+        """Non-blocking background tasks for new session: bootstrap, git, codebase scan, docs sync."""
+        # Bootstrap cache pre-compute
+        try:
+            scaffold = await self._get_bootstrap_scaffold(user_id, workspace_path)
+            if scaffold:
+                cache_key = f"{user_id}:{workspace_path}" if workspace_path else user_id
+                self._global_bootstrap_ram_cache[cache_key] = scaffold
+                _log_bg("Bootstrap", f"Pre-computed and cached for {cache_key}", emoji="")
+        except Exception as e:
+            _log_bg("Bootstrap", f"Background caching failed: {e}", emoji="")
+
+        # Git context (non-blocking, inline cache update)
+        try:
+            import subprocess, os
+            wp = workspace_path or os.getcwd()
+            if os.path.isdir(os.path.join(wp, ".git")):
+                loop = asyncio.get_event_loop()
+                log = await loop.run_in_executor(
+                    None, lambda: subprocess.run(
+                        ["git", "log", "--oneline", "-5"],
+                        capture_output=True, text=True, timeout=5, cwd=wp,
+                    )
+                )
+                ctx = f"Recent commits:\n{log.stdout.strip()}" if log.stdout else ""
+                diff = await loop.run_in_executor(
+                    None, lambda: subprocess.run(
+                        ["git", "diff", "--stat"],
+                        capture_output=True, text=True, timeout=5, cwd=wp,
+                    )
+                )
+                if diff.stdout:
+                    ctx += f"\nUncommitted changes:\n{diff.stdout.strip()[:300]}"
+                if ctx:
+                    cache_key = f"{user_id}:{workspace_path}" if workspace_path else user_id
+                    existing = self._global_bootstrap_ram_cache.get(cache_key, "")
+                    self._global_bootstrap_ram_cache[cache_key] = f"{existing}\n\n{ctx}" if existing else ctx
+        except Exception:
+            pass
+
+        # Codebase scan & docs sync
+        asyncio.create_task(self._auto_scan_codebase(workspace_path, user_id))
+        asyncio.create_task(self._sync_docs_files(workspace_path, user_id))
+
     async def handle_new_session(self, args: dict) -> dict:
         try:
             user_id = args.get("user_id", self.manager.config.default_user_id)
@@ -870,83 +1208,49 @@ class ToolHandlers:
             )
             self._current_session_id = session_id
             self._exchange_unsaved = False
+
+            # Parallel embedding: system prompt + session start marker
+            add_tasks = []
             if system_prompt:
-                memory_id = await self.manager.add_memory(
+                add_tasks.append(self.manager.add_memory(
                     text=f"[System Prompt] {system_prompt}",
                     tags=["system_prompt", "session"],
                     importance=5,
                     level="session",
                     user_id=user_id,
                     workspace_path=workspace_path,
-                )
-            else:
-                memory_id = None
-
-            # Seed session start marker
-            await self.manager.add_memory(
+                ))
+            add_tasks.append(self.manager.add_memory(
                 text=f"[SESSION_START] Session {session_id[:8]} opened",
                 tags=["session_start", "bootstrap", "session", self._session_tag()],
                 importance=5,
                 level="session",
                 user_id=user_id,
                 workspace_path=workspace_path,
-            )
+            ))
+            mem_results = await asyncio.gather(*add_tasks, return_exceptions=True)
+            memory_id = mem_results[0] if (system_prompt and mem_results and not isinstance(mem_results[0], Exception)) else None
+            if not system_prompt:
+                memory_id = None
 
-            # Compute bootstrap in background (non-blocking) so cache is ready for first recall
-            async def _cache_bootstrap():
-                try:
-                    scaffold = await self._get_bootstrap_scaffold(user_id, workspace_path)
-                    if scaffold:
-                        cache_key = f"{user_id}:{workspace_path}" if workspace_path else user_id
-                        self._global_bootstrap_ram_cache[cache_key] = scaffold
-                        _log_bg("Bootstrap", f"Pre-computed and cached for {cache_key}", emoji="")
-                except Exception as e:
-                    _log_bg("Bootstrap", f"Background caching failed: {e}", emoji="")
-            asyncio.create_task(_cache_bootstrap())
-
-            # Extract project context from git for immediate model awareness
-            project_context = ""
-            loop = asyncio.get_event_loop()
-            try:
-                import subprocess, os
-                wp = workspace_path or os.getcwd()
-                if os.path.isdir(os.path.join(wp, ".git")):
-                    log = await loop.run_in_executor(
-                        None, lambda: subprocess.run(
-                            ["git", "log", "--oneline", "-5"],
-                            capture_output=True, text=True, timeout=5, cwd=wp,
-                        )
-                    )
-                    if log.stdout:
-                        project_context = f"Recent commits:\n{log.stdout.strip()}"
-                    diff = await loop.run_in_executor(
-                        None, lambda: subprocess.run(
-                            ["git", "diff", "--stat"],
-                            capture_output=True, text=True, timeout=5, cwd=wp,
-                        )
-                    )
-                    if diff.stdout:
-                        project_context += f"\nUncommitted changes:\n{diff.stdout.strip()[:300]}"
-            except Exception:
-                pass
+            # Background operations (non-blocking)
+            asyncio.create_task(self._bg_new_session_tasks(user_id, workspace_path))
 
             data = {
                 "session_id": session_id,
                 "memory_id": memory_id,
                 "message": "New session created",
-                "project_context": project_context or "MemoryMesh MCP server — memory mesh system",
+                "project_context": "Loading project context...",
                 "recall_instruction": COMBINED_AGENT_INSTRUCTION,
                 "save_instruction": COMBINED_AGENT_INSTRUCTION,
                 "permanent_log_directive": PERMANENT_LOG_DIRECTIVE,
                 "tool_registry_reminder": (
-                    "MANDATORY: Re-read all tool descriptions (Fat Description) "
-                    "to remember mandatory tools: save_context_pair, recall, remember. "
-                    "This prevents forgetting in long conversations."
+                    "ACTION-BASED CHECKPOINT: MemoryMesh tracks your uncommitted actions. "
+                    "Use commit_milestone(summary, tasks_done, next_steps) when finishing "
+                    "a logical block of work. Do NOT call after every response."
                 ),
             }
 
-            asyncio.create_task(self._auto_scan_codebase(workspace_path, user_id))
-            asyncio.create_task(self._sync_docs_files(workspace_path, user_id))
             await self._log_context("assistant", f"New session created: {session_id}", "new_session", str(args))
 
             return {"status": "success", "data": data}
@@ -955,15 +1259,14 @@ class ToolHandlers:
             return {"status": "error", "error": str(e)}
 
     async def handle_end_session(self, args: dict) -> dict:
-        if self._exchange_unsaved:
-            self._exchange_unsaved = False
-            await self._trigger_layer2()
-
         try:
             session_id = args.get("session_id", self._current_session_id)
             user_id = args.get("user_id", self.manager.config.default_user_id)
             if not session_id:
                 return {"status": "error", "error": "No active session to end"}
+
+            # TEARDOWN HOOK: flush unsaved context before finalizing
+            await self._trigger_teardown_snapshot()
 
             await self._finalize_session(session_id, user_id)
 
@@ -981,13 +1284,32 @@ class ToolHandlers:
             user_id = args.get("user_id", self.manager.config.default_user_id)
             if not session_id:
                 return {"status": "error", "error": "No session specified"}
+
+            session = await self.session_store.get_session(session_id)
+            if not session:
+                return {"status": "error", "error": f"Session {session_id} not found"}
+
+            # Auto-end active session before deletion
+            did_end = False
+            if session.get("status") == "active":
+                logger.warning("Session %s is active — auto-ending before delete", session_id)
+                await self.handle_end_session({"session_id": session_id, "user_id": user_id})
+                did_end = True
+
+            # Step 1: Preserve important memories (copy to knowledge level before deletion)
             preserved = await self.manager.preserve_important_memories(session_id, user_id)
+
+            # Step 2: Hard delete vector memories (memory.db)
             deleted = await self.manager.delete_memories_by_session(session_id, user_id)
-            await self.session_store.mark_deleted(session_id)
+
+            # Step 3: Hard delete session record + context_log + snapshots (sessions.db)
+            await self.session_store.hard_delete_session(session_id)
+
             if session_id == self._current_session_id:
                 self._current_session_id = ""
+            msg = f"Session permanently deleted" + (f" (auto-ended before delete)" if did_end else "")
             await self._log_context("assistant", f"Session deleted: {session_id}", "delete_session", str(args))
-            return {"status": "success", "data": {"session_id": session_id, "preserved_count": preserved, "deleted_count": deleted, "message": "Session deleted"}}
+            return {"status": "success", "data": {"session_id": session_id, "preserved_count": preserved, "deleted_count": deleted, "message": msg}}
         except MemoryMeshError as e:
             logger.error("Delete session failed: %s", e)
             return {"status": "error", "error": str(e)}
