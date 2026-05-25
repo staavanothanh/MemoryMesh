@@ -43,3 +43,15 @@ jobs:
         run: |
           pip install pyright
           pyright src/
+
+      - name: Security scan (pip-audit)
+        continue-on-error: true
+        run: |
+          pip install pip-audit
+          pip-audit
+
+      - name: Security scan (safety)
+        continue-on-error: true
+        run: |
+          pip install safety
+          safety check

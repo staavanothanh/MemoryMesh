@@ -26,6 +26,8 @@ from ..prompts import COMBINED_AGENT_INSTRUCTION
 from ..embedder import prewarm_embedder
 from .tools import TOOLS
 from .handlers import ToolHandlers, SemanticFilter
+from ..schemas import validate_tool_input
+from ..utils.rate_limiter import get_global_limiter
 
 logger = logging.getLogger(__name__)
 
@@ -89,6 +91,8 @@ class MemoryMeshServer:
 
         @self.mcp_server.call_tool()
         async def call_tool(name: str, arguments: dict) -> list[TextContent]:
+            from pydantic import ValidationError as PydanticValidationError
+
             handler_map = {
                 "remember": self.handlers.handle_remember,
                 "recall": self.handlers.handle_recall,
@@ -112,6 +116,33 @@ class MemoryMeshServer:
             handler = handler_map.get(name)
             if not handler:
                 raise ValueError(f"Unknown tool: {name}")
+
+            # Pydantic runtime validation for all tool inputs
+            try:
+                validated = validate_tool_input(name, arguments)
+                arguments = validated.model_dump()
+            except PydanticValidationError as e:
+                return [TextContent(
+                    type="text",
+                    text=json.dumps({
+                        "status": "error",
+                        "error": f"Input validation failed: {e}",
+                    }, ensure_ascii=False)
+                )]
+
+            # Rate limiting for expensive tools (per-session)
+            expensive_tools = frozenset({"recall", "save_workspace_context", "remember"})
+            if name in expensive_tools:
+                session_key = arguments.get("user_id", "default")
+                limiter = get_global_limiter()
+                if not await limiter.allow(session_key):
+                    return [TextContent(
+                        type="text",
+                        text=json.dumps({
+                            "status": "error",
+                            "error": "Rate limit exceeded. Slow down and retry.",
+                        }, ensure_ascii=False)
+                    )]
 
             # Detect client from MCP request context (per-connection, via contextvars)
             client_name = ""

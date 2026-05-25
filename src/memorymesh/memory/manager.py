@@ -33,6 +33,20 @@ def _log_bg(label: str, msg: str, emoji: str = ""):
     logger.info("%s %s[%s]%s %s", emoji, _MAGENTA, label, _RESET, msg)
 
 class MemoryManager:
+    # Background task rate-limiting constants (seconds)
+    CONSOLIDATION_COOLDOWN_SEC: float = 60.0
+    FACT_RESOLUTION_COOLDOWN_SEC: float = 120.0
+    EXPIRY_COOLDOWN_SEC: float = 60.0
+
+    # Recency / importance decay constants
+    RECENCY_HALF_LIFE_HOURS: float = 24.0
+    IMPORTANCE_HALF_LIFE_DAYS: float = 7.0
+    SECONDS_PER_HOUR: float = 3600.0
+    SECONDS_PER_DAY: float = 86400.0
+
+    # Score boost for atomic facts
+    ATOMIC_FACT_SCORE_MULTIPLIER: float = 1.5
+
     def __init__(
         self,
         config: AppConfig,
@@ -89,6 +103,27 @@ class MemoryManager:
         if os.path.dirname(normalized_mem) == os.path.dirname(normalized_cur):
             return True
         return False
+
+    @staticmethod
+    def _apply_search_filters(
+        results: List[Dict],
+        workspace_path: Optional[str] = None,
+    ) -> List[Dict]:
+        """Filter results: exclude archived/consolidated/expired, apply workspace scope."""
+        filtered = [
+            r for r in results
+            if not r.get("metadata", {}).get("archived")
+            and not r.get("metadata", {}).get("consolidated")
+            and not r.get("metadata", {}).get("expired")
+        ]
+        if workspace_path:
+            filtered = [
+                r for r in filtered
+                if MemoryManager._is_workspace_visible(
+                    r.get("metadata", {}).get("workspace_path"), workspace_path
+                )
+            ]
+        return filtered
 
     async def add_memory(
         self,
@@ -161,19 +196,19 @@ class MemoryManager:
         if self.config.instinct.enabled:
             self._create_tracked_task(self._maybe_learn_instincts(user_id))
 
-        # 3. Consolidation: rate-limited (max once per 60s per user)
+        # 3. Consolidation: rate-limited (max once per COOLDOWN_SEC per user)
         last_c = self._last_consolidation.get(user_id, 0)
-        if now - last_c >= 60:
+        if now - last_c >= self.CONSOLIDATION_COOLDOWN_SEC:
             self._last_consolidation[user_id] = now
             self._create_tracked_task(self._maybe_consolidate(user_id))
 
-        # 4. Fact resolution: rate-limited (max once per 120s per user)
+        # 4. Fact resolution: rate-limited (max once per COOLDOWN_SEC per user)
         last_f = self._last_fact_resolution.get(user_id, 0)
-        if now - last_f >= 120:
+        if now - last_f >= self.FACT_RESOLUTION_COOLDOWN_SEC:
             self._last_fact_resolution[user_id] = now
             self._create_tracked_task(self._maybe_resolve_facts(user_id))
 
-        # 5. Session memory expiry: rate-limited (max once per 60s per user)
+        # 5. Session memory expiry: rate-limited (max once per COOLDOWN_SEC per user)
         last_e = self._last_expiry.get(user_id, 0)
         if now - last_e >= 60:
             self._last_expiry[user_id] = now
@@ -315,21 +350,7 @@ class MemoryManager:
                     keywords, uid, limit=top_k * 2,
                 )
                 tier2_enriched = await self._enrich_fts_results(tier2_raw, uid)
-                # Filter out archived/consolidated/expired
-                tier2_filtered = [
-                    r for r in tier2_enriched
-                    if not r.get("metadata", {}).get("archived")
-                    and not r.get("metadata", {}).get("consolidated")
-                    and not r.get("metadata", {}).get("expired")
-                ]
-                # Apply workspace filter
-                if workspace_path:
-                    tier2_filtered = [
-                        r for r in tier2_filtered
-                        if self._is_workspace_visible(
-                            r.get("metadata", {}).get("workspace_path"), workspace_path
-                        )
-                    ]
+                tier2_filtered = self._apply_search_filters(tier2_enriched, workspace_path)
                 if tier2_filtered:
                     # Convert enriched dict to SearchResult
                     results = self._dicts_to_search_results(tier2_filtered[:top_k])
@@ -341,20 +362,7 @@ class MemoryManager:
         try:
             tier3_raw = await self.backend.list_recent(uid, limit=top_k)
             tier3_enriched = await self._enrich_fts_results(tier3_raw, uid)
-            # Apply filters
-            tier3_filtered = [
-                r for r in tier3_enriched
-                if not r.get("metadata", {}).get("archived")
-                and not r.get("metadata", {}).get("consolidated")
-                and not r.get("metadata", {}).get("expired")
-            ]
-            if workspace_path:
-                tier3_filtered = [
-                    r for r in tier3_filtered
-                    if self._is_workspace_visible(
-                        r.get("metadata", {}).get("workspace_path"), workspace_path
-                    )
-                ]
+            tier3_filtered = self._apply_search_filters(tier3_enriched, workspace_path)
             if tier3_filtered:
                 results = self._dicts_to_search_results(tier3_filtered[:top_k])
                 return results, "chronological", {}
@@ -377,25 +385,23 @@ class MemoryManager:
             for d in dicts
         ]
 
-    @staticmethod
-    def _recency_score(timestamp_str: str) -> float:
+    def _recency_score(self, timestamp_str: str) -> float:
         """Compute recency score (0-1) decaying over ~1 day (half-life ~16.6h)."""
         try:
             created = datetime.fromisoformat(timestamp_str)
-            hours_ago = (datetime.now(timezone.utc) - created).total_seconds() / 3600
-            return math.exp(-abs(hours_ago) / 24)
+            hours_ago = (datetime.now(timezone.utc) - created).total_seconds() / self.SECONDS_PER_HOUR
+            return math.exp(-abs(hours_ago) / self.RECENCY_HALF_LIFE_HOURS)
         except (ValueError, TypeError, OverflowError):
             return 0.0
 
-    @staticmethod
-    def _importance_decay(timestamp_str: str) -> float:
+    def _importance_decay(self, timestamp_str: str) -> float:
         """Decay multiplier for importance (half-life ~7 days)."""
         try:
             created = datetime.fromisoformat(timestamp_str)
-            days_ago = (datetime.now(timezone.utc) - created).total_seconds() / 86400
+            days_ago = (datetime.now(timezone.utc) - created).total_seconds() / self.SECONDS_PER_DAY
             if days_ago <= 0:
                 return 1.0
-            return math.exp(-days_ago / 7)
+            return math.exp(-days_ago / self.IMPORTANCE_HALF_LIFE_DAYS)
         except (ValueError, TypeError, OverflowError):
             return 1.0
 
@@ -414,7 +420,7 @@ class MemoryManager:
 
         tags = mem.get("metadata", {}).get("tags", [])
         if isinstance(tags, list) and "atomic_fact" in tags:
-            base_score *= 1.5
+            base_score *= self.ATOMIC_FACT_SCORE_MULTIPLIER
 
         return base_score
 

@@ -13,6 +13,7 @@ from ..memory.fact_extractor import FactExtractor
 from ..scanner import CodebaseScanner
 from ..errors import MemoryMeshError
 from ..utils.json_parser import clean_and_parse_llm_json
+from ..utils.path_sanitizer import sanitize_workspace_path
 from ..prompts import COMBINED_AGENT_INSTRUCTION, PERMANENT_LOG_DIRECTIVE, BOOTSTRAP_SNAPSHOT_PROMPT
 
 _session_var: ContextVar[str] = ContextVar('_session_var', default='')
@@ -22,6 +23,9 @@ _ERROR_PRESERVE_KEYWORDS = frozenset({
     "fix", "bug", "error", "crash", "failure", "fail", "hotfix", "patch",
     "workaround", "root cause", "lỗi", "sửa", "debug",
 })
+
+# Bootstrap snapshot constants
+_BOOTSTRAP_MAX_CHARS = 15000
 
 _MAGENTA = "\033[1;35m"
 _CYAN = "\033[1;36m"
@@ -34,6 +38,19 @@ def _log_bg(label: str, msg: str, emoji: str = ""):
     logger.info("%s %s[%s]%s %s", emoji, _MAGENTA, label, _RESET, msg)
 
 logger = logging.getLogger(__name__)
+
+
+def _safe_error_response(e: Exception, operation: str = "") -> dict:
+    """Convert an exception to a safe MCP error response without leaking internals.
+
+    MemoryMeshError subclasses are considered safe to expose. All other exceptions
+    are logged server-side and replaced with a generic error message.
+    """
+    if isinstance(e, MemoryMeshError):
+        logger.error("%s failed: %s", operation or "Operation", e)
+        return {"status": "error", "error": str(e)}
+    logger.error("%s failed with unexpected error", operation or "Operation", exc_info=True)
+    return {"status": "error", "error": "Internal server error"}
 
 
 class SemanticFilter:
@@ -133,18 +150,15 @@ class ToolHandlers:
 
     @property
     def _current_session_id(self):
-        val = _session_var.get()
-        return val if val else self._current_session_id_fallback
+        return _session_var.get()
 
     @_current_session_id.setter
     def _current_session_id(self, value):
         _session_var.set(value)
-        self._current_session_id_fallback = value
 
     def __init__(self, manager: MemoryManager, session_store: SessionStore):
         self.manager = manager
         self.session_store = session_store
-        self._current_session_id_fallback = ""
         self._cached_workspace = None
         self._exchange_unsaved: bool = False
         self._reminder_count: int = 0
@@ -442,6 +456,26 @@ class ToolHandlers:
         except Exception as e:
             logger.warning("Codebase auto-scan failed: %s", e)
 
+    @staticmethod
+    def _truncate_log_text(log: list, session_id: str, max_chars: int = _BOOTSTRAP_MAX_CHARS) -> str:
+        """Truncate session log to fit within max_chars, keeping most recent messages."""
+        if len(log) < 3:
+            return f"Session {session_id[:8]} ended with {len(log)} messages."
+
+        lines = [f"{e['role']}: {e['content']}" for e in log]
+        if sum(len(l) for l in lines) <= max_chars:
+            return "\n".join(lines)
+
+        kept = []
+        acc = 0
+        for e in reversed(log):
+            line = f"{e['role']}: {e['content']}"
+            if acc + len(line) > max_chars:
+                break
+            kept.append(line)
+            acc += len(line)
+        return "\n".join(reversed(kept))
+
     async def _create_bootstrap_snapshot(self, session_id: str, user_id: str = "") -> Optional[str]:
         """Create L1 bootstrap snapshot (~1k tokens) from session context and save as a bootstrap memory.
         Also saves the compact_summary as a standalone session summary.
@@ -450,19 +484,7 @@ class ToolHandlers:
         uid = user_id or self.manager.config.default_user_id
         try:
             log = await self.session_store.get_context_log(session_id, limit=self.manager.config.session.compact_threshold)
-            if len(log) < 3:
-                log_text = f"Session {session_id[:8]} ended with {len(log)} messages."
-            else:
-                lines = [f"{e['role']}: {e['content']}" for e in log]
-                total = sum(len(l) for l in lines)
-                if total > 15000:
-                    kept = []; acc = 0
-                    for e in reversed(log):
-                        l = f"{e['role']}: {e['content']}"
-                        if acc + len(l) > 15000: break
-                        kept.append(l); acc += len(l)
-                    lines = list(reversed(kept))
-                log_text = "\n".join(lines)
+            log_text = self._truncate_log_text(log, session_id)
 
             prompt = BOOTSTRAP_SNAPSHOT_PROMPT.format(log=log_text)
             try:
@@ -1022,7 +1044,11 @@ class ToolHandlers:
 
     async def _load_session_instructions(self, workspace_path: str) -> str:
         cfg = self.manager.config.session.session_start
-        if not workspace_path or not os.path.isdir(workspace_path):
+        try:
+            safe_path = sanitize_workspace_path(workspace_path) if workspace_path else ""
+        except ValueError:
+            return ""
+        if not safe_path or not os.path.isdir(safe_path):
             return ""
 
         loop = asyncio.get_event_loop()
@@ -1059,7 +1085,7 @@ class ToolHandlers:
                 parts.append(f"# Global Instructions\n{content}")
 
         # Tier 2: Instructions directory (all .md/.txt files, sorted)
-        dir_path = os.path.join(workspace_path, cfg.instructions_dir)
+        dir_path = os.path.join(safe_path, cfg.instructions_dir)
         if os.path.isdir(dir_path):
             try:
                 fnames = sorted(
@@ -1075,7 +1101,7 @@ class ToolHandlers:
 
         # Tier 3: Auto-detect CLI/IDE files (first match wins)
         for fname in file_priority:
-            fpath = os.path.join(workspace_path, fname)
+            fpath = os.path.join(safe_path, fname)
             content = await _read(fpath)
             if content:
                 parts.append(f"# From {fname}\n{content}")
@@ -1088,7 +1114,11 @@ class ToolHandlers:
 
     async def _sync_docs_files(self, workspace_path: str, user_id: str):
         cfg = self.manager.config.session.session_start
-        if not cfg.docs_sync_enabled or not workspace_path or not os.path.isdir(workspace_path):
+        try:
+            safe_path = sanitize_workspace_path(workspace_path) if workspace_path else ""
+        except ValueError:
+            return
+        if not cfg.docs_sync_enabled or not safe_path or not os.path.isdir(safe_path):
             return
 
         loop = asyncio.get_event_loop()
@@ -1116,7 +1146,7 @@ class ToolHandlers:
 
         saved = 0
         for fname in docs_files:
-            doc = await _read_doc(os.path.join(workspace_path, fname))
+            doc = await _read_doc(os.path.join(safe_path, fname))
             if doc:
                 name, content = doc
                 try:
@@ -1126,7 +1156,7 @@ class ToolHandlers:
                         importance=4,
                         level="session",
                         user_id=user_id,
-                        workspace_path=workspace_path,
+                        workspace_path=safe_path,
                     )
                     saved += 1
                 except Exception as e:
