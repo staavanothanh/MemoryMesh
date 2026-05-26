@@ -85,11 +85,24 @@ class InstinctConfig:
 
 
 @dataclass
+class EmbeddingConfig:
+    mode: Literal["local", "remote"] = "local"
+    model: str = "paraphrase-multilingual-MiniLM-L12-v2"
+    remote_api_url: str = ""
+    remote_api_key: str = ""
+
+    def validate(self):
+        if self.mode == "remote" and not self.remote_api_url:
+            raise ValueError("REMOTE_EMBEDDING_API_URL is required when EMBEDDING_MODE=remote")
+
+
+@dataclass
 class AppConfig:
     router: RouterConfig
     sqlite_vec: SqliteVecConfig
     session: SessionConfig
     consolidation: ConsolidationConfig
+    embedding: EmbeddingConfig = field(default_factory=EmbeddingConfig)
     instinct: InstinctConfig = field(default_factory=InstinctConfig)
     level_weight_session: float = 2.0
     level_weight_user: float = 1.5
@@ -161,7 +174,13 @@ class AppConfig:
             level_weight_session=float(os.getenv("LEVEL_WEIGHT_SESSION", "2.0")),
             level_weight_user=float(os.getenv("LEVEL_WEIGHT_USER", "1.5")),
             level_weight_knowledge=float(os.getenv("LEVEL_WEIGHT_KNOWLEDGE", "1.0")),
-            embedding_model=os.getenv("EMBEDDING_MODEL", "paraphrase-multilingual-MiniLM-L12-v2"),
+            embedding=EmbeddingConfig(
+            mode=os.getenv("EMBEDDING_MODE", "local"),
+            model=os.getenv("EMBEDDING_MODEL", "paraphrase-multilingual-MiniLM-L12-v2"),
+            remote_api_url=os.getenv("REMOTE_EMBEDDING_API_URL", ""),
+            remote_api_key=os.getenv("REMOTE_EMBEDDING_API_KEY", ""),
+        ),
+        embedding_model=os.getenv("EMBEDDING_MODEL", "paraphrase-multilingual-MiniLM-L12-v2"),
             default_user_id=os.getenv("DEFAULT_USER_ID", "Shinn"),
             mcp_transport=os.getenv("MCP_TRANSPORT", "stdio"),
             mcp_port=int(os.getenv("MCP_PORT", "8090")),

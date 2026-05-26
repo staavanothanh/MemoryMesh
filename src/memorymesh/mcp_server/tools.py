@@ -21,6 +21,12 @@ from ..schemas import (
     DeleteSessionInput,
     PreserveSessionMemoriesInput,
     ResumeSessionInput,
+    CreateEntityInput,
+    CreateRelationInput,
+    QueryGraphInput,
+    TraceEntityInput,
+    RecallRawInput,
+    LearnSessionInput,
 )
 
 
@@ -37,6 +43,10 @@ MUTATE_TOOLS = frozenset({
     "forget", "archive_memory", "unarchive_memory", "save_system_prompt",
     "new_session", "end_session", "delete_session", "preserve_session_memories",
     "save_workspace_context", "resume_session",
+})
+
+COGNITIVE_TOOLS = frozenset({
+    "create_entity", "create_relation", "query_graph", "trace_entity",
 })
 
 TOOLS = [
@@ -129,5 +139,38 @@ TOOLS = [
         name="resume_session",
         description="Restore old session context. Auto-called when resuming previous work.",
         inputSchema=_schema(ResumeSessionInput),
+    ),
+
+    # ── Knowledge Graph Tools (Cognitive Operations — safe for Plan/Read-Only) ──────
+
+    Tool(
+        name="create_entity",
+        description="[COGNITIVE OPERATION — SAFE FOR PLAN/READ-ONLY MODE] Create a knowledge entity in the Knowledge Graph. Does NOT modify file system. Records the model's concepts, conclusions, plans, and reasoning as structured graph nodes for future recall.",
+        inputSchema=_schema(CreateEntityInput),
+    ),
+    Tool(
+        name="create_relation",
+        description="[COGNITIVE OPERATION — SAFE FOR PLAN/READ-ONLY MODE] Create a semantic relation between two entities in the Knowledge Graph. Does NOT modify file system. Records how concepts relate (SOLVES, DEPENDS_ON, IMPLEMENTS, etc.) for structured multi-hop reasoning.",
+        inputSchema=_schema(CreateRelationInput),
+    ),
+    Tool(
+        name="query_graph",
+        description="Query 1-hop neighbors of an entity in the Knowledge Graph. Returns entities directly connected to the given entity with their relation types and weights.",
+        inputSchema=_schema(QueryGraphInput),
+    ),
+    Tool(
+        name="trace_entity",
+        description="Traverse multi-hop paths in the Knowledge Graph starting from an entity. Uses recursive CTE for efficient graph traversal. Returns connected entities at each depth level with their relation types.",
+        inputSchema=_schema(TraceEntityInput),
+    ),
+    Tool(
+        name="recall_raw",
+        description="Query raw tool call history for a session. Returns verbatim tool calls with timestamps, execution time, and status. Supports filtering by tool name and success/error status.",
+        inputSchema=_schema(RecallRawInput),
+    ),
+    Tool(
+        name="learn_session",
+        description="Analyze a session's tool call history and extract behavioral patterns as instincts. Identifies frequent workflow sequences and tag patterns.",
+        inputSchema=_schema(LearnSessionInput),
     ),
 ]

@@ -1,16 +1,37 @@
-.PHONY: install test run lint typecheck setup clean
+.PHONY: install install-local install-cli test test-unit test-int run setup lint typecheck clean
 
 install:
 	pip install -e ".[test]"
 
+install-local:
+	pip install -e ".[test,local]"
+
+install-cli:
+	pip install -e ".[test,cli]"
+
+install-all:
+	pip install -e ".[test,local,cli]"
+
 test:
 	python -m pytest tests/ -v
+
+test-unit:
+	python -m pytest tests/unit/ -v
+
+test-int:
+	python -m pytest tests/integration/ -v
 
 run:
 	python -m memorymesh
 
+sessions:
+	python -m memorymesh sessions
+
+stats:
+	python -m memorymesh stats
+
 setup:
-	pip install -e ".[test]"
+	pip install -e ".[test,local,cli]"
 	python -m memorymesh init
 	@echo "---"
 	@echo "MemoryMesh ready. Edit .env if needed, then run 'opencode'."

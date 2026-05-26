@@ -3,142 +3,21 @@ import asyncio
 import time
 import os
 import logging
-from contextvars import ContextVar
-from typing import Optional, List, Any
+from typing import Optional, Any
 from cachetools import TTLCache
-from ..hooks import hooks as global_hooks
-from ..memory.manager import MemoryManager
-from ..memory.session_store import SessionStore
-from ..memory.fact_extractor import FactExtractor
-from ..scanner import CodebaseScanner
-from ..errors import MemoryMeshError
-from ..utils.json_parser import clean_and_parse_llm_json
-from ..utils.path_sanitizer import sanitize_workspace_path
-from ..prompts import COMBINED_AGENT_INSTRUCTION, PERMANENT_LOG_DIRECTIVE, BOOTSTRAP_SNAPSHOT_PROMPT
 
-_session_var: ContextVar[str] = ContextVar('_session_var', default='')
-_client_name_var: ContextVar[str] = ContextVar('_client_name_var', default='')
-
-_ERROR_PRESERVE_KEYWORDS = frozenset({
-    "fix", "bug", "error", "crash", "failure", "fail", "hotfix", "patch",
-    "workaround", "root cause", "lỗi", "sửa", "debug",
-})
-
-# Bootstrap snapshot constants
-_BOOTSTRAP_MAX_CHARS = 15000
-
-_MAGENTA = "\033[1;35m"
-_CYAN = "\033[1;36m"
-_GREEN = "\033[1;32m"
-_RESET = "\033[0m"
-
-
-def _log_bg(label: str, msg: str, emoji: str = ""):
-    """ANSI-colored structured log for background operations."""
-    logger.info("%s %s[%s]%s %s", emoji, _MAGENTA, label, _RESET, msg)
-
-logger = logging.getLogger(__name__)
-
-
-def _safe_error_response(e: Exception, operation: str = "") -> dict:
-    """Convert an exception to a safe MCP error response without leaking internals.
-
-    MemoryMeshError subclasses are considered safe to expose. All other exceptions
-    are logged server-side and replaced with a generic error message.
-    """
-    if isinstance(e, MemoryMeshError):
-        logger.error("%s failed: %s", operation or "Operation", e)
-        return {"status": "error", "error": str(e)}
-    logger.error("%s failed with unexpected error", operation or "Operation", exc_info=True)
-    return {"status": "error", "error": "Internal server error"}
-
-
-class SemanticFilter:
-    _NOISE = frozenset({
-        "hello", "hi", "thanks", "thank you", "ok", "okay", "sure", "got it",
-        "cảm ơn", "được", "vâng", "ừ", "hiểu rồi", "dạ", "vâng ạ",
-    })
-
-    @staticmethod
-    def is_valuable(content: str) -> bool:
-        if not content or len(content.strip()) < 20:
-            return False
-        return content.strip().lower() not in SemanticFilter._NOISE
-
-
-class ConversationTracker:
-    CHOKE_THRESHOLD = 5
-    READ_ONLY_TOOLS = frozenset({
-        "recall", "remember", "list_memories", "ping",
-        "list_sessions", "get_session_context",
-    })
-
-    def __init__(self, session_id: str):
-        self.session_id = session_id
-        self._uncommitted_actions: int = 0
-        self._hostage_data: Optional[Any] = None
-        self._tool_footprints: list[str] = []
-        self._last_activity: float = time.monotonic()
-        self._has_unsaved_context: bool = False
-
-    def record_tool_call(self, name: str, args: dict):
-        self._last_activity = time.monotonic()
-        self._has_unsaved_context = True
-
-        query = args.get("query") or args.get("content") or args.get("user_message") or ""
-        if query and name in ("recall", "remember", "commit_milestone"):
-            self._tool_footprints.append(f"[{name}:{str(query)[:50]}]")
-        else:
-            self._tool_footprints.append(f"[{name}]")
-
-        if name not in self.READ_ONLY_TOOLS and name != "commit_milestone":
-            self._uncommitted_actions += 1
-
-    def on_milestone_commit(self):
-        self._uncommitted_actions = 0
-        self._has_unsaved_context = False
-        self._tool_footprints.clear()
-
-    def engage_choke_point(self, data_to_hold: Any) -> str:
-        self._hostage_data = data_to_hold
-        return (
-            "🛑 CHOKE-POINT ENGAGED: Your working memory is overloaded "
-            f"({self._uncommitted_actions} uncommitted actions). "
-            "I have the data you requested, but you MUST call `commit_milestone` first. "
-            "Summarize your completed tasks now, and I will release the data."
-        )
-
-    def resolve_milestone(self) -> Optional[Any]:
-        self._uncommitted_actions = 0
-        self._has_unsaved_context = False
-        self._tool_footprints.clear()
-        released = self._hostage_data
-        self._hostage_data = None
-        return released
-
-    def should_flush(self, idle_threshold: float = 60.0) -> bool:
-        idle = time.monotonic() - self._last_activity > idle_threshold
-        return idle and self._uncommitted_actions > 0
-
-    def flush(self) -> str:
-        footprint = " → ".join(self._tool_footprints) if self._tool_footprints else "[no tools]"
-        self._tool_footprints.clear()
-        return (
-            f"[AUTO-SNAPSHOT] Uncommitted work (idle timeout). "
-            f"Tool sequence: {footprint}"
-        )
-
-    def teardown_flush(self) -> Optional[str]:
-        if not self._has_unsaved_context and self._uncommitted_actions == 0:
-            return None
-        footprint = " → ".join(self._tool_footprints) if self._tool_footprints else "[no tools]"
-        self._has_unsaved_context = False
-        self._tool_footprints.clear()
-        self._uncommitted_actions = 0
-        return (
-            f"[SESSION-FINAL-SNAPSHOT] Session ended with unsaved context. "
-            f"Tool sequence: {footprint}"
-        )
+from ._core import _log_bg, _safe_error_response, _ERROR_PRESERVE_KEYWORDS, _BOOTSTRAP_MAX_CHARS, _session_var, _client_name_var, _MAGENTA, _CYAN, _GREEN, _RESET, logger
+from .semantic_filter import SemanticFilter
+from .tracker import ConversationTracker
+from ...hooks import hooks as global_hooks
+from ...memory.manager import MemoryManager
+from ...memory.session_store import SessionStore
+from ...memory.fact_extractor import FactExtractor
+from ...scanner import CodebaseScanner
+from ...errors import MemoryMeshError
+from ...utils.json_parser import clean_and_parse_llm_json
+from ...utils.path_sanitizer import sanitize_workspace_path
+from ...prompts import COMBINED_AGENT_INSTRUCTION, PERMANENT_LOG_DIRECTIVE, BOOTSTRAP_SNAPSHOT_PROMPT
 
 
 class ToolHandlers:
@@ -173,6 +52,8 @@ class ToolHandlers:
         self._write_queue: asyncio.Queue = asyncio.Queue(maxsize=100)
         self._write_worker_task: Optional[asyncio.Task] = None
 
+    # ── Session management ──────────────────────────────────────────────
+
     async def set_session(self, session_id: str):
         self._current_session_id = session_id
         self._cached_workspace = None
@@ -206,6 +87,8 @@ class ToolHandlers:
             tracker.on_milestone_commit()
         except Exception:
             pass
+
+    # ── Write worker ────────────────────────────────────────────────────
 
     def start_write_worker(self):
         if self._write_worker_task is None:
@@ -259,6 +142,8 @@ class ToolHandlers:
             except Exception as e:
                 logger.error("Idle flush loop error: %s", e)
 
+    # ── Context & auto-save ─────────────────────────────────────────────
+
     async def _get_workspace_path(self) -> str:
         if self._cached_workspace is None and self._current_session_id:
             session = await self.session_store.get_session(self._current_session_id)
@@ -268,8 +153,63 @@ class ToolHandlers:
                 self._cached_workspace = ""
         return self._cached_workspace or ""
 
+    async def _get_context_delta(self, session_id: str, uid: str, wp: str, max_tokens: int = 800) -> str:
+        """Build a compressed Context Delta (<800 tokens) for auto-recall.
+        
+        Queries: last Milestone summary, recent context log, recent file paths.
+        """
+        try:
+            parts = []
+
+            # 1. Last Milestone from bootstrap cache or tag lookup
+            cache_key = f"{uid}:{wp}" if wp else uid
+            cached = self._global_bootstrap_ram_cache.get(cache_key)
+            if cached:
+                parts.append(f"[Previous Session]\n{cached[:400]}")
+            else:
+                tagged = await self.manager.backend.list_by_tag(uid, "milestone")
+                for m in tagged[:3]:
+                    mem_wp = m.get("metadata", {}).get("workspace_path", "")
+                    if wp and mem_wp and mem_wp != wp:
+                        continue
+                    text = m.get("content", "")[:300]
+                    if text:
+                        parts.append(f"[Last Milestone]\n{text}")
+
+            # 2. Recent context log (last 5 entries)
+            context = await self.session_store.get_context_log(session_id, limit=5)
+            if context:
+                ctx_lines = []
+                for e in context:
+                    role = e.get("role", "?")
+                    content = e.get("content", "")[:100]
+                    ctx_lines.append(f"{role}: {content}")
+                parts.append("[Recent Activity]\n" + "\n".join(ctx_lines))
+
+            # 3. Recent workspace files (from scanner or snapshot)
+            snaphots = await self.session_store.get_workspace_snapshots(session_id, limit=1)
+            for snap in snaphots:
+                data = snap.get("snapshot_data", {})
+                files = data.get("files", {})
+                dirs = files.get("dirs", [])[:10]
+                fnames = files.get("files", [])[:10]
+                if dirs or fnames:
+                    parts.append("[Active Files]\n" + ", ".join(dirs + fnames))
+
+            result = "\n\n".join(parts)
+
+            # Strict token truncation
+            token_count = len(result) // 4
+            if token_count > max_tokens:
+                result = result[:max_tokens * 4] + "\n...[truncated]"
+            return result
+        except Exception as e:
+            logger.warning("Context delta failed: %s", e)
+            return ""
+
     async def ensure_session(self, args: dict) -> bool:
-        """Auto-resume or create a session if none active. Returns True if initialized."""
+        """Auto-resume or create a session if none active. Returns True if initialized.
+        Phase 5.1: Returns Context Delta (<800 tokens) for auto-recall."""
         if self._current_session_id:
             session = await self.session_store.get_session(self._current_session_id)
             if session and session.get("status") == "active":
@@ -288,6 +228,17 @@ class ToolHandlers:
                         sid = s["session_id"]
                         self._current_session_id = sid
                         self._cached_workspace = None
+
+                        # Phase 5.1: Compute Context Delta for auto-recall
+                        delta = await self._get_context_delta(sid, uid, wp)
+                        if delta:
+                            cache_key = f"{uid}:{wp}" if wp else uid
+                            existing = self._global_bootstrap_ram_cache.get(cache_key, "")
+                            if existing:
+                                self._global_bootstrap_ram_cache[cache_key] = f"{existing}\n\n[Context Delta]\n{delta}"
+                            else:
+                                self._global_bootstrap_ram_cache[cache_key] = delta
+
                         asyncio.create_task(self._warm_resume_cache(sid, uid, wp))
                         _log_bg("AutoSession", f"Resumed ended session {sid[:8]} for {wp}", emoji="")
                         return True
@@ -422,6 +373,8 @@ class ToolHandlers:
         except Exception as e:
             logger.warning("Teardown snapshot failed: %s", e)
 
+    # ── Depth & scan ────────────────────────────────────────────────────
+
     async def _layer3_depth_check(self):
         if not self._current_session_id:
             return
@@ -455,6 +408,8 @@ class ToolHandlers:
             logger.info("Codebase auto-scanned: %d entries, memory=%s", len(snapshot.get("tree", [])), memory_id)
         except Exception as e:
             logger.warning("Codebase auto-scan failed: %s", e)
+
+    # ── Bootstrap logic ─────────────────────────────────────────────────
 
     @staticmethod
     def _truncate_log_text(log: list, session_id: str, max_chars: int = _BOOTSTRAP_MAX_CHARS) -> str:
@@ -636,6 +591,56 @@ class ToolHandlers:
                 return
         await self._flush_fact_buffer()
 
+    # ── Phase 5: Lifecycle Automation ────────────────────────────────────
+
+    async def recover_orphaned_sessions(self, uid: str = ""):
+        """Find sessions without milestones and auto-generate summaries.
+        
+        Phase 5.2: Lazy Summarization — runs as background task on startup
+        or idle trigger. Queries 'ended' sessions, checks for missing
+        milestones, and calls LLM to generate one.
+        """
+        user_id = uid or self.manager.config.default_user_id
+        try:
+            sessions = await self.session_store.list_sessions(
+                user_id, limit=10, status="ended", include_deleted=False
+            )
+            for session in sessions:
+                sid = session["session_id"]
+                # Check if this session already has a milestone
+                tagged = await self.manager.backend.list_by_tag(user_id, "milestone")
+                has_milestone = any(
+                    f"session:{sid}" in m.get("metadata", {}).get("tags", [])
+                    for m in tagged
+                )
+                if has_milestone:
+                    continue
+                # Get context logs for orphaned session
+                context = await self.session_store.get_context_log(sid, limit=15)
+                if len(context) < 3:
+                    continue
+                log_text = "\n".join(
+                    f"{e['role']}: {e['content'][:200]}" for e in context[-10:]
+                )
+                prompt = f"Summarize this session into a Milestone: summary, tasks done, next steps.\n\n{log_text}"
+                try:
+                    response = await self.manager.router.call_llm_background(prompt, json_mode=False)
+                    await self.manager.add_memory(
+                        text=f"[Auto-Milestone] {response[:500]}",
+                        tags=["milestone", "auto_recovery", f"session:{sid}"],
+                        importance=3,
+                        level="knowledge",
+                        user_id=user_id,
+                        workspace_path=session.get("workspace_path", ""),
+                    )
+                    logger.info("Orphan recovery: milestone created for session %s", sid[:8])
+                except Exception as e:
+                    logger.warning("Orphan recovery LLM failed for %s: %s", sid[:8], e)
+        except Exception as e:
+            logger.error("Orphan recovery failed: %s", e, exc_info=True)
+
+    # ── Memory handlers ─────────────────────────────────────────────────
+
     async def handle_remember(self, args: dict) -> dict:
         wp = await self._get_workspace_path()
         level = args.get("level", "user")
@@ -645,6 +650,10 @@ class ToolHandlers:
             importance >= 4 or any(kw in content.lower() for kw in _ERROR_PRESERVE_KEYWORDS)
         ):
             level = "knowledge"
+
+        # Phase 7.3: Bulk ingestion — return immediately, compute embedding in background
+        is_bulk = len(content) > 1000
+
         try:
             memory_id = await self.manager.add_memory(
                 text=content,
@@ -653,17 +662,52 @@ class ToolHandlers:
                 level=level,
                 user_id=args.get("user_id"),
                 workspace_path=wp if wp else args.get("workspace_path"),
+                background=is_bulk,
             )
             await self._log_context("assistant", f"Saved memory: {args['content'][:200]}", "remember", str(args))
+            if is_bulk:
+                return {"status": "queued", "data": {"id": memory_id, "message": "Memory queued — embedding in background"}}
             return {"status": "success", "data": {"id": memory_id}}
         except MemoryMeshError as e:
             logger.error("Remember failed: %s", e)
             return {"status": "error", "error": str(e)}
 
+    async def _search_graph_parallel(self, query: str, uid: str, wp: str) -> str:
+        if self.manager.graph is None:
+            return ""
+        try:
+            query_words = query.lower().split()
+            word_scores: dict = {}
+            entities = await self.manager.graph.list_entities(uid, limit=50)
+            for ent in entities:
+                ename = ent["name"].lower()
+                score = 0.0
+                for w in query_words:
+                    if w in ename or ename in w:
+                        score += 1.0
+                if score > 0:
+                    word_scores[ent["name"]] = score
+            if not word_scores:
+                return ""
+
+            best_entity = max(word_scores, key=word_scores.get)
+            result = await self.manager.graph.query_graph(best_entity, uid, limit=10)
+            if result.get("neighbors"):
+                return self.manager.graph.format_xml_from_neighbors(result["entity"], result["neighbors"])
+        except Exception as e:
+            logger.debug("Graph search skipped: %s", e)
+        return ""
+
     async def handle_recall(self, args: dict) -> dict:
         wp = args.get("workspace_path") or await self._get_workspace_path()
         uid = args.get("user_id", self.manager.config.default_user_id)
         cache_key = f"{uid}:{wp}" if wp else uid
+
+        # Phase 6.2: Cursor-based pagination support
+        raw_cursor = args.get("cursor")
+        if raw_cursor:
+            return await self._handle_recall_paginated(uid, wp, args, raw_cursor)
+
         try:
             # Check recall cache before ANN search
             cached_results = self._recall_results_cache.pop(cache_key, None)
@@ -715,6 +759,9 @@ class ToolHandlers:
                         "meta": {"tier": "choked", "count": 0},
                     }
 
+            # PHASE 4: Parallel Graph Search — run alongside vector search
+            graph_task = asyncio.create_task(self._search_graph_parallel(args["query"], uid, wp))
+
             formatted = []
             if bootstrap_text:
                 formatted.append(bootstrap_text)
@@ -732,15 +779,70 @@ class ToolHandlers:
                 else:
                     prefix = "MEM"
                 formatted.append(f"[{prefix}] {r.get('content', '')} (score: {r.get('score', 0.0):.2f})")
+
+            graph_xml = await graph_task
+            if graph_xml:
+                formatted.append(f"\n{graph_xml}")
+
+            meta = {"tier": tier_used, "count": len(results)}
+            if graph_xml:
+                meta["graph"] = True
+
             return {
                 "status": "success",
                 "data": results,
                 "formatted": "\n".join(formatted) if formatted else "No relevant memories found.",
-                "meta": {"tier": tier_used, "count": len(results)},
+                "meta": meta,
             }
         except MemoryMeshError as e:
             logger.error("Recall failed: %s", e)
             return {"status": "error", "error": str(e)}
+
+    async def _handle_recall_paginated(self, uid: str, wp: str, args: dict, raw_cursor: str) -> dict:
+        """Phase 6.2: Cursor-based pagination for deep recall pages."""
+        try:
+            import json as _json
+            cursor_dict = _json.loads(raw_cursor) if isinstance(raw_cursor, str) else raw_cursor
+        except (_json.JSONDecodeError, TypeError):
+            cursor_dict = None
+
+        cm = getattr(self.manager, "context_manager", None)
+        if not cm:
+            return {"status": "error", "error": "Context manager not initialized"}
+
+        max_tokens = args.get("max_tokens") or self.manager.config.token_budget
+        try:
+            page = await cm.get_context_page(
+                user_id=uid,
+                max_tokens=max_tokens,
+                cursor=cursor_dict,
+            )
+        except Exception as e:
+            logger.error("Paginated recall failed: %s", e)
+            return {"status": "error", "error": str(e)}
+
+        results = page.get("results", [])
+        next_cursor = page.get("next_cursor")
+        has_more = page.get("has_more", False)
+
+        _log_bg("Recall", f"Page={page.get('next_cursor', {}).get('page', 1) if next_cursor else '?'}, results={len(results)}, query='{args['query'][:80]}'", emoji="")
+        await self._log_context("assistant", f"Paginated recall: {len(results)} results, has_more={has_more}", "recall", str(args))
+
+        formatted = []
+        for r in results:
+            prefix = "FACT" if "atomic_fact" in r.get("metadata", {}).get("tags", []) else "MEM"
+            formatted.append(f"[{prefix}] {r.get('content', '')} (score: {r.get('score', 0.0):.2f})")
+
+        meta = {"count": len(results), "page": next_cursor.get("page", 1) if next_cursor else 1, "has_more": has_more}
+        if next_cursor:
+            meta["next_cursor"] = _json.dumps(next_cursor) if isinstance(raw_cursor, str) else next_cursor
+
+        return {
+            "status": "success",
+            "data": results,
+            "formatted": "\n".join(formatted) if formatted else "No more results.",
+            "meta": meta,
+        }
 
     async def handle_forget(self, args: dict) -> dict:
         try:
@@ -798,6 +900,207 @@ class ToolHandlers:
                 "fts_connected": fts_ok,
             },
         }
+
+    async def handle_recall_raw(self, args: dict) -> dict:
+        try:
+            session_id = args.get("session_id", self._current_session_id)
+            limit = args.get("limit", 50)
+            offset = args.get("offset", 0)
+            tool_name = args.get("tool_name", "")
+            status_filter = args.get("status", "")
+
+            if not session_id:
+                return {"status": "error", "error": "No session specified"}
+
+            if tool_name or status_filter:
+                results = await self.session_store.search_raw_log(
+                    tool_name=tool_name, status=status_filter, limit=limit
+                )
+            else:
+                results = await self.session_store.get_raw_log(
+                    session_id=session_id, limit=limit, offset=offset
+                )
+
+            formatted = []
+            for r in results:
+                formatted.append(
+                    f"[{r['timestamp']}] {r['tool_name']} ({r['status']}, {r.get('execution_time_ms', 0):.1f}ms)"
+                )
+
+            return {
+                "status": "success",
+                "data": results,
+                "formatted": "\n".join(formatted) if formatted else "No raw log entries found.",
+                "meta": {"count": len(results)},
+            }
+        except Exception as e:
+            logger.error("recall_raw failed: %s", e)
+            return {"status": "error", "error": str(e)}
+
+    async def handle_learn_session(self, args: dict) -> dict:
+        if not self.manager.config.instinct.enabled:
+            return {"status": "error", "error": "Instinct learning is disabled"}
+        try:
+            session_id = args.get("session_id", self._current_session_id)
+            user_id = args.get("user_id", self.manager.config.default_user_id)
+            if not session_id:
+                return {"status": "error", "error": "No session specified"}
+
+            raw_logs = await self.session_store.get_raw_log(session_id, limit=500)
+            if not raw_logs:
+                return {"status": "success", "data": {"message": "No tool call data to learn from", "learned": 0}}
+
+            tool_sequence = [r["tool_name"] for r in reversed(raw_logs)]
+            wp = await self._get_workspace_path()
+
+            from collections import Counter
+            seq_counter = Counter()
+            for i in range(len(tool_sequence)):
+                for j in range(i + 1, min(i + 4, len(tool_sequence))):
+                    sub_seq = tool_sequence[i:j]
+                    if len(sub_seq) >= 2:
+                        seq_counter[" → ".join(sub_seq)] += 1
+
+            learned = 0
+            existing = await self.manager.instinct_store.get_active_instincts(user_id)
+            existing_conditions = {json.dumps(e["condition"]) for e in existing}
+
+            for seq_str, count in seq_counter.items():
+                if count < 2 or learned >= 10:
+                    continue
+                tools = seq_str.split(" → ")
+                condition = {"type": "workflow", "sequence": tools}
+                if json.dumps(condition) in existing_conditions:
+                    continue
+                confidence = min(0.8, 0.2 + count * 0.2)
+                await self.manager.instinct_store.add_instinct(
+                    user_id=user_id,
+                    condition=condition,
+                    action={"type": "suggest_workflow", "sequence": tools},
+                    confidence=round(confidence, 4),
+                    workspace_path=wp,
+                )
+                learned += 1
+
+            await self._log_context("assistant", f"Learned {learned} workflow patterns from session", "learn_session", str(args))
+            return {"status": "success", "data": {"learned": learned, "message": f"Learned {learned} workflow patterns from session {session_id[:8]}"}}
+        except Exception as e:
+            logger.error("learn_session failed: %s", e)
+            return {"status": "error", "error": str(e)}
+
+    # ── Knowledge Graph Handlers (Cognitive Operations) ──────────────────
+
+    async def _ensure_graph(self) -> bool:
+        if self.manager.graph is None:
+            logger.warning("GraphStore not initialized")
+            return False
+        return True
+
+    async def handle_create_entity(self, args: dict) -> dict:
+        if not await self._ensure_graph():
+            return {"status": "error", "error": "Knowledge Graph not initialized"}
+        try:
+            user_id = args.get("user_id", self.manager.config.default_user_id)
+            props = None
+            raw = args.get("properties")
+            if raw:
+                import json as _json
+                try:
+                    props = _json.loads(raw)
+                except (_json.JSONDecodeError, TypeError):
+                    props = {"raw": raw}
+            entity_id = await self.manager.graph.create_entity(
+                name=args["name"],
+                user_id=user_id,
+                entity_type=args.get("entity_type", "concept"),
+                properties=props,
+            )
+            await self._log_context("assistant", f"Entity created: {args['name']}", "create_entity", str(args))
+            return {"status": "success", "data": {"id": entity_id, "name": args["name"], "type": args.get("entity_type", "concept")}}
+        except Exception as e:
+            logger.error("create_entity failed: %s", e)
+            return {"status": "error", "error": str(e)}
+
+    async def handle_create_relation(self, args: dict) -> dict:
+        if not await self._ensure_graph():
+            return {"status": "error", "error": "Knowledge Graph not initialized"}
+        try:
+            user_id = args.get("user_id", self.manager.config.default_user_id)
+
+            source = await self.manager.graph.get_entity_by_name(args["source"], user_id)
+            if not source:
+                source_id = await self.manager.graph.create_entity(
+                    name=args["source"], user_id=user_id, entity_type="concept"
+                )
+            else:
+                source_id = source["id"]
+
+            target = await self.manager.graph.get_entity_by_name(args["target"], user_id)
+            if not target:
+                target_id = await self.manager.graph.create_entity(
+                    name=args["target"], user_id=user_id, entity_type="concept"
+                )
+            else:
+                target_id = target["id"]
+
+            relation_id = await self.manager.graph.create_relation(
+                source_id=source_id,
+                target_id=target_id,
+                relation_type=args["relation_type"],
+                user_id=user_id,
+                weight=args.get("weight", 1.0),
+            )
+            await self._log_context("assistant", f"Relation: {args['source']} --{args['relation_type']}--> {args['target']}", "create_relation", str(args))
+            return {"status": "success", "data": {"id": relation_id, "source": args["source"], "target": args["target"], "relation_type": args["relation_type"]}}
+        except Exception as e:
+            logger.error("create_relation failed: %s", e)
+            return {"status": "error", "error": str(e)}
+
+    async def handle_query_graph(self, args: dict) -> dict:
+        if not await self._ensure_graph():
+            return {"status": "error", "error": "Knowledge Graph not initialized"}
+        try:
+            user_id = args.get("user_id", self.manager.config.default_user_id)
+            result = await self.manager.graph.query_graph(
+                entity_name=args["entity_name"],
+                user_id=user_id,
+                limit=args.get("limit", 20),
+            )
+            xml_triplet = self.manager.graph.format_xml_from_neighbors(
+                result.get("entity"), result.get("neighbors", [])
+            ) if result.get("entity") else ""
+            error_msg = result.get("error", "")
+            formatted = xml_triplet if xml_triplet else error_msg
+            return {
+                "status": "success" if result.get("entity") else "error",
+                "data": result,
+                "formatted": formatted or "No graph data found.",
+            }
+        except Exception as e:
+            logger.error("query_graph failed: %s", e)
+            return {"status": "error", "error": str(e)}
+
+    async def handle_trace_entity(self, args: dict) -> dict:
+        if not await self._ensure_graph():
+            return {"status": "error", "error": "Knowledge Graph not initialized"}
+        try:
+            user_id = args.get("user_id", self.manager.config.default_user_id)
+            result = await self.manager.graph.trace_entity(
+                entity_name=args["entity_name"],
+                user_id=user_id,
+                max_depth=args.get("max_depth", 3),
+                max_relations=args.get("max_relations", 20),
+            )
+            xml_triplet = self.manager.graph.format_xml_triplet(result.get("relations", []))
+            formatted = xml_triplet if xml_triplet else (result.get("error", "") or "No path found.")
+            return {
+                "status": "success" if result.get("entity") else "error",
+                "data": result,
+                "formatted": formatted,
+            }
+        except Exception as e:
+            logger.error("trace_entity failed: %s", e)
+            return {"status": "error", "error": str(e)}
 
     async def handle_save_system_prompt(self, args: dict) -> dict:
         try:
@@ -890,6 +1193,8 @@ class ToolHandlers:
         except Exception as e:
             logger.error("Legacy save_context_pair failed: %s", e)
             return {"status": "error", "error": str(e)}
+
+    # ── Session handlers ────────────────────────────────────────────────
 
     async def handle_list_sessions(self, args: dict) -> dict:
         try:
@@ -1355,6 +1660,8 @@ class ToolHandlers:
         except MemoryMeshError as e:
             logger.error("Preserve session memories failed: %s", e)
             return {"status": "error", "error": str(e)}
+
+    # ── Workspace handlers ──────────────────────────────────────────────
 
     async def handle_save_workspace_context(self, args: dict) -> dict:
         try:

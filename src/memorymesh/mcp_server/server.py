@@ -21,11 +21,15 @@ from ..hooks import hooks as global_hooks
 from ..memory.sqlite_vec_backend import SqliteVecBackend
 from ..memory.manager import MemoryManager
 from ..memory.session_store import SessionStore
+from ..memory.async_batch_logger import AsyncBatchLogger
+from ..memory.instinct_manager import InstinctManager, background_learning_daemon
+from ..utils.tool_middleware import ToolExecutionMiddleware
 from ..logging_ import setup_logging
 from ..prompts import COMBINED_AGENT_INSTRUCTION
-from ..embedder import prewarm_embedder
+from ..embedder import init_embedder, close_embedder, prewarm_embedder
 from .tools import TOOLS
-from .handlers import ToolHandlers, SemanticFilter
+from .handlers import ToolHandlers
+from .handlers.semantic_filter import SemanticFilter
 from ..schemas import validate_tool_input
 from ..utils.rate_limiter import get_global_limiter
 
@@ -74,7 +78,12 @@ class MemoryMeshServer:
         self.manager = MemoryManager(config, self.backend, self.router, hooks=global_hooks)
         self.session_store = SessionStore(config.session.db_path)
         self.handlers = ToolHandlers(self.manager, self.session_store)
+        self.batch_logger = AsyncBatchLogger(config.session.db_path)
+        self.instinct_manager = InstinctManager(self.manager.instinct_store)
+        self.tool_middleware = ToolExecutionMiddleware(self.instinct_manager)
         self.mcp_server = Server("memorymesh")
+        self._idle_timer: Optional[asyncio.TimerHandle] = None
+        self._IDLE_TIMEOUT: float = 900.0  # 15 minutes
         self._shutdown_event = asyncio.Event()
         self._background_tasks: set[asyncio.Task] = set()
         self._idle_flush_task: Optional[asyncio.Task] = None
@@ -83,6 +92,23 @@ class MemoryMeshServer:
     def _init_options(self):
         opts = self.mcp_server.create_initialization_options()
         return opts.model_copy(update={"instructions": COMBINED_AGENT_INSTRUCTION})
+
+    def _reset_idle_timer(self):
+        if self._idle_timer is not None:
+            self._idle_timer.cancel()
+        loop = asyncio.get_event_loop()
+        self._idle_timer = loop.call_later(
+            self._IDLE_TIMEOUT,
+            lambda: asyncio.create_task(self._on_idle_timeout()),
+        )
+
+    async def _on_idle_timeout(self):
+        logger.info("Idle watchdog triggered after %d seconds", self._IDLE_TIMEOUT)
+        try:
+            uid = self.config.default_user_id
+            await self.handlers.recover_orphaned_sessions(uid)
+        except Exception as e:
+            logger.error("Idle watchdog summarization failed: %s", e, exc_info=True)
 
     def _register_tools(self):
         @self.mcp_server.list_tools()
@@ -112,6 +138,12 @@ class MemoryMeshServer:
                 "preserve_session_memories": self.handlers.handle_preserve_session_memories,
                 "save_workspace_context": self.handlers.handle_save_workspace_context,
                 "resume_session": self.handlers.handle_resume_session,
+                "create_entity": self.handlers.handle_create_entity,
+                "create_relation": self.handlers.handle_create_relation,
+                "query_graph": self.handlers.handle_query_graph,
+                "trace_entity": self.handlers.handle_trace_entity,
+                "recall_raw": self.handlers.handle_recall_raw,
+                "learn_session": self.handlers.handle_learn_session,
             }
             handler = handler_map.get(name)
             if not handler:
@@ -158,10 +190,22 @@ class MemoryMeshServer:
             if name != "new_session":
                 await self.handlers.ensure_session(arguments)
 
+            # Phase 5.3: Reset idle watchdog on every tool call
+            self._reset_idle_timer()
+
             # Layer 2/3 tracking (must run before handler)
             await self.handlers._note_tool_call(name, arguments)
 
             result = await handler(arguments)
+
+            # PHASE 4: Tool execution middleware — sliding window + JIT instinct injection
+            reactions = self.tool_middleware.record_call(name, arguments)
+            if reactions:
+                result = self.tool_middleware.inject_into_response(result, reactions)
+
+            # PHASE 3: Log every tool call to raw_log
+            if name != "ping":
+                asyncio.create_task(self._safely_log_raw(name, arguments, result))
 
             # LAYER 2: Auto-save every tool call (except read-only to avoid overwrite loop)
             read_only_tools = ("ping", "list_sessions", "list_memories", "get_session_context", "recall")
@@ -178,8 +222,17 @@ class MemoryMeshServer:
 
             return contents
 
+    @staticmethod
+    async def _safe_task_wrapper(coro):
+        try:
+            await coro
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            logger.error("Background task failed: %s", e, exc_info=True)
+
     def _create_tracked_task(self, coro) -> asyncio.Task:
-        task = asyncio.create_task(coro)
+        task = asyncio.create_task(self._safe_task_wrapper(coro))
         self._background_tasks.add(task)
         task.add_done_callback(self._background_tasks.discard)
         return task
@@ -188,7 +241,25 @@ class MemoryMeshServer:
         try:
             await self.handlers.save_auto_tool_context(tool_name, args, result)
         except Exception as e:
-            logger.warning("Layer 2 auto-save failed: %s", e)
+            logger.error("Layer 2 auto-save failed: %s", e)
+
+    async def _safely_log_raw(self, tool_name: str, arguments: dict, result: dict):
+        try:
+            sid = await self.handlers.get_current_session_id()
+            if not sid:
+                return
+            exec_time = 0.0
+            status = "success" if result.get("status") == "success" else "error"
+            await self.batch_logger.log_event(
+                session_id=sid,
+                tool_name=tool_name,
+                input_dict=arguments,
+                output_dict=result,
+                exec_time_ms=exec_time,
+                status=status,
+            )
+        except Exception as e:
+            logger.error("Raw log failed: %s", e)
 
     async def _initialize_fast(self):
         """Fast init: open DBs, warm embedder, and create a fresh session."""
@@ -196,8 +267,8 @@ class MemoryMeshServer:
         await self.session_store.initialize()
         if self.config.instinct.enabled:
             await self.manager.instinct_store.initialize()
-        # Pre-warm embedding model synchronously so first recall is fast
-        await prewarm_embedder(self.config.embedding_model)
+        # Pre-warm embedding model (factory-based — local or remote)
+        await init_embedder(self.config.embedding)
         if self.config.session.auto_create_session:
             system_prompt = COMBINED_AGENT_INSTRUCTION
             session_id = await self.session_store.create_session(
@@ -206,7 +277,14 @@ class MemoryMeshServer:
             )
             logger.info("Auto-created fresh session: %s", session_id)
             await self.handlers.set_session(session_id)
+        self.manager.graph = self.backend.graph
+        from ..memory.context_manager import ContextManager
+        self.manager.context_manager = ContextManager(self.backend)
         self.handlers.start_write_worker()
+        self.batch_logger.start()
+        self._create_tracked_task(self.instinct_manager.load_all())
+        self.tool_middleware.set_project(self.config.default_user_id)
+        self._reset_idle_timer()
         self._idle_flush_task = self._create_tracked_task(self.handlers._idle_flush_loop())
 
     async def _initialize_slow(self):
@@ -215,7 +293,14 @@ class MemoryMeshServer:
             if self.config.session.auto_scan_codebase:
                 await self.handlers._auto_scan_codebase(user_id=self.config.default_user_id)
         except Exception as e:
-            logger.warning("Slow initialization failed: %s", e)
+            logger.error("Slow initialization failed: %s", e, exc_info=True)
+
+        # Phase 5.3: Orphan recovery on startup
+        try:
+            uid = self.config.default_user_id
+            await self.handlers.recover_orphaned_sessions(uid)
+        except Exception as e:
+            logger.warning("Startup orphan recovery failed: %s", e)
 
     async def _cleanup(self):
         logger.info("Shutting down...")
@@ -224,7 +309,7 @@ class MemoryMeshServer:
         try:
             await self.handlers._trigger_teardown_snapshot()
         except Exception as e:
-            logger.warning("Teardown snapshot error: %s", e)
+            logger.error("Teardown snapshot error: %s", e)
 
         # Stop background tasks
         await self.handlers.stop_write_worker()
@@ -232,6 +317,10 @@ class MemoryMeshServer:
             self._idle_flush_task.cancel()
         except Exception:
             pass
+        # Cancel idle watchdog
+        if self._idle_timer is not None:
+            self._idle_timer.cancel()
+            self._idle_timer = None
 
         # Flush any pending trackers before shutdown (teardown already captured the main one)
         try:
@@ -253,9 +342,9 @@ class MemoryMeshServer:
                                 user_id=self.config.default_user_id,
                             )
                         except Exception as e:
-                            logger.warning("Shutdown flush write failed: %s", e)
+                            logger.error("Shutdown flush write failed: %s", e)
         except Exception as e:
-            logger.warning("Shutdown flush error: %s", e)
+            logger.error("Shutdown flush error: %s", e)
 
         # Drain memory write queue
         try:
@@ -275,30 +364,52 @@ class MemoryMeshServer:
                     timeout=30.0
                 )
         except asyncio.TimeoutError:
-            logger.warning("Shutdown finalization timed out (30s)")
+            logger.error("Shutdown finalization timed out (30s)")
         except Exception as e:
-            logger.warning("Shutdown finalization failed: %s", e)
+            logger.error("Shutdown finalization failed: %s", e)
 
         try:
             await self.backend.close()
         except Exception as e:
-            logger.warning("Backend close error: %s", e)
+            logger.error("Backend close error: %s", e)
         try:
             await self.session_store.close()
         except Exception as e:
-            logger.warning("Session store close error: %s", e)
+            logger.error("Session store close error: %s", e)
         try:
             await self.manager.instinct_store.close()
         except Exception as e:
-            logger.warning("Instinct store close error: %s", e)
+            logger.error("Instinct store close error: %s", e)
         try:
             await self.router.close()
         except Exception as e:
-            logger.warning("Router close error: %s", e)
+            logger.error("Router close error: %s", e)
+        try:
+            await self.batch_logger.stop()
+        except Exception as e:
+            logger.warning("Batch logger stop error: %s", e)
+
+        # PHASE 4: Trigger background learning daemon on shutdown
+        try:
+            tool_sequences = self.tool_middleware.get_tool_sequences()
+            if len(tool_sequences) >= 5:
+                self._create_tracked_task(background_learning_daemon(
+                    self.instinct_manager,
+                    self.manager.instinct_store,
+                    tool_sequences,
+                    self.config.default_user_id,
+                ))
+        except Exception as e:
+            logger.warning("Background learning trigger failed: %s", e)
+
         try:
             await self.manager.shutdown()
         except Exception as e:
             logger.warning("Manager shutdown error: %s", e)
+        try:
+            await close_embedder()
+        except Exception as e:
+            logger.warning("Embedder close error: %s", e)
         logger.info("Shutdown complete")
 
     async def run_stdio(self):
@@ -385,9 +496,9 @@ class MemoryMeshServer:
                     timeout=30.0,
                 )
         except asyncio.TimeoutError:
-            logger.warning("Shutdown finalization timed out (30s), force closing...")
+            logger.error("Shutdown finalization timed out (30s), force closing...")
         except Exception as e:
-            logger.warning("Shutdown finalization failed: %s", e)
+            logger.error("Shutdown finalization failed: %s", e)
         self._shutdown_event.set()
 
 

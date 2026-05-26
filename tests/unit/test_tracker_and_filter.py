@@ -2,7 +2,8 @@ import time
 import pytest
 import pytest_asyncio
 
-from memorymesh.mcp_server.handlers import SemanticFilter, ConversationTracker
+from memorymesh.mcp_server.handlers.semantic_filter import SemanticFilter
+from memorymesh.mcp_server.handlers.tracker import ConversationTracker
 
 
 class TestSemanticFilter:

@@ -1,43 +1,53 @@
-"""Singleton SentenceTransformer embedder, async-safe with thread-based loading."""
+"""Embedding interface — delegates to factory-chosen provider.
 
-import asyncio
-import threading
-from functools import lru_cache
-from typing import List
+Lazy initialization: if init_embedder() hasn't been called,
+get_embedding() will auto-init with a local provider for backward compatibility.
+"""
 
-from sentence_transformers import SentenceTransformer
+import logging
+from typing import List, Optional
 
-_embedder_instance = None
-_model_name = None
-_init_lock = threading.Lock()
+from .config import EmbeddingConfig
+from .embeddings.factory import create_embedding_provider
+from .embeddings.providers import EmbeddingProvider
 
+logger = logging.getLogger(__name__)
 
-def _load_model(name: str) -> SentenceTransformer:
-    """Load or reuse the embedding model (thread-safe)."""
-    global _embedder_instance, _model_name
-    if _embedder_instance is not None and _model_name == name:
-        return _embedder_instance
-    with _init_lock:
-        if _embedder_instance is None or _model_name != name:
-            _embedder_instance = SentenceTransformer(name)
-            _model_name = name
-    return _embedder_instance
+_provider: Optional[EmbeddingProvider] = None
 
 
-def _sync_compute(text: str, model_name: str) -> List[float]:
-    """Synchronous embedding computation with LRU cache."""
-    model = _load_model(model_name)
-    return model.encode(text).tolist()
+async def get_embedding(text: str, model_name: str = "") -> List[float]:
+    """Compute embedding for text using the configured provider.
+
+    Auto-initializes with local provider if not yet initialized,
+    for backward compatibility with tests and existing code.
+    """
+    global _provider
+    if _provider is None:
+        cfg = EmbeddingConfig(mode="local", model=model_name or "paraphrase-multilingual-MiniLM-L12-v2")
+        await init_embedder(cfg)
+    return await _provider.get_embedding(text)
 
 
-_cached_compute = lru_cache(maxsize=64)(_sync_compute)
-
-
-async def get_embedding(text: str, model_name: str) -> List[float]:
-    """Compute embedding for text using the cached model (runs in thread, cached by text)."""
-    return await asyncio.to_thread(_cached_compute, text, model_name)
+async def init_embedder(config: EmbeddingConfig):
+    """Initialize the embedding provider from config."""
+    global _provider
+    if _provider is not None:
+        return
+    _provider = create_embedding_provider(config)
+    await _provider.prewarm()
+    logger.info("Embedder initialized (mode=%s)", config.mode)
 
 
 async def prewarm_embedder(model_name: str):
-    """Pre-warm: load model and compute a dummy embedding at startup."""
-    await get_embedding("ping", model_name)
+    """Backward-compatible prewarm — loads provider with default local config."""
+    if _provider is None:
+        cfg = EmbeddingConfig(mode="local", model=model_name)
+        await init_embedder(cfg)
+
+
+async def close_embedder():
+    global _provider
+    if _provider:
+        await _provider.close()
+        _provider = None

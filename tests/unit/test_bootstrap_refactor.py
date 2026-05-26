@@ -3,7 +3,7 @@ import pytest
 import pytest_asyncio
 from unittest.mock import patch, AsyncMock
 
-from memorymesh.mcp_server.handlers import ToolHandlers
+from memorymesh.mcp_server.handlers.base import ToolHandlers
 from memorymesh.memory.session_store import SessionStore
 from memorymesh.prompts import BOOTSTRAP_SNAPSHOT_PROMPT
 

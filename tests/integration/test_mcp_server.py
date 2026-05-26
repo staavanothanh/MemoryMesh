@@ -3,7 +3,9 @@ import pytest
 import pytest_asyncio
 from unittest.mock import patch, AsyncMock
 
-from memorymesh.mcp_server.handlers import ToolHandlers, ConversationTracker, SemanticFilter
+from memorymesh.mcp_server.handlers.base import ToolHandlers
+from memorymesh.mcp_server.handlers.tracker import ConversationTracker
+from memorymesh.mcp_server.handlers.semantic_filter import SemanticFilter
 from memorymesh.memory.session_store import SessionStore
 from memorymesh.config import AppConfig
 

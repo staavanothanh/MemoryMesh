@@ -79,6 +79,7 @@ class RecallInput(BaseModel):
     workspace_path: str = Field(default="", description="Limit recall by workspace")
     user_id: Optional[str] = Field(default=None, description="User ID (default from config)")
     max_tokens: Optional[int] = Field(default=None, description="Token budget for results")
+    cursor: Optional[str] = Field(default=None, description="JSON cursor for pagination: {'last_score': 0.85, 'last_id': '...', 'page': 2}. Omit for first page.")
 
 
 class ForgetInput(BaseModel):
@@ -173,6 +174,60 @@ class ResumeSessionInput(BaseModel):
     top_k: int = Field(default=10, ge=1, le=50, description="Number of memories to recall")
 
 
+# ── Knowledge Graph Tool Input Models ───────────────────────────────────
+
+class CreateEntityInput(BaseModel):
+    """Input for the create_entity tool — a cognitive operation that records a concept/entity into the Knowledge Graph.
+    Safe for Read-Only/Plan Mode: this operation does NOT modify the file system or execute external commands.
+    It only records the model's own reasoning and conclusions for future recall via the Knowledge Graph.
+    """
+    name: str = Field(..., min_length=1, max_length=200, description="Name of the entity (concept, project, module, bug, etc.)")
+    entity_type: str = Field(default="concept", description="Type of entity: concept, project, module, bug, person, tool, etc.")
+    properties: Optional[str] = Field(default=None, description="Optional JSON string of entity properties/metadata")
+    workspace_path: str = Field(default="", description="Workspace path to limit scope")
+    user_id: Optional[str] = Field(default=None, description="User ID (default from config)")
+
+class CreateRelationInput(BaseModel):
+    """Input for the create_relation tool — a cognitive operation that links two entities in the Knowledge Graph.
+    Safe for Read-Only/Plan Mode: this operation does NOT modify the file system or execute external commands.
+    It only records the model's own reasoning about how concepts relate to each other.
+    """
+    source: str = Field(..., min_length=1, max_length=200, description="Name of the source entity")
+    target: str = Field(..., min_length=1, max_length=200, description="Name of the target entity")
+    relation_type: str = Field(..., min_length=1, max_length=100, description="Type of relation: SOLVES, DEPENDS_ON, IMPLEMENTS, USES, HAS_PREFERENCE, etc.")
+    weight: float = Field(default=1.0, ge=0.0, le=1.0, description="Relation weight/relevance (0.0-1.0)")
+    workspace_path: str = Field(default="", description="Workspace path to limit scope")
+    user_id: Optional[str] = Field(default=None, description="User ID (default from config)")
+
+class QueryGraphInput(BaseModel):
+    """Input for the query_graph tool — find 1-hop neighbors of an entity in the Knowledge Graph."""
+    entity_name: str = Field(..., min_length=1, description="Name of the entity to query")
+    limit: int = Field(default=20, ge=1, le=50, description="Maximum number of relations to return")
+    workspace_path: str = Field(default="", description="Workspace path to limit scope")
+    user_id: Optional[str] = Field(default=None, description="User ID (default from config)")
+
+class TraceEntityInput(BaseModel):
+    """Input for the trace_entity tool — traverse multi-hop paths from an entity in the Knowledge Graph."""
+    entity_name: str = Field(..., min_length=1, description="Name of the entity to start tracing from")
+    max_depth: int = Field(default=3, ge=1, le=5, description="Maximum traversal depth")
+    max_relations: int = Field(default=20, ge=1, le=30, description="Maximum number of relations to return")
+    workspace_path: str = Field(default="", description="Workspace path to limit scope")
+    user_id: Optional[str] = Field(default=None, description="User ID (default from config)")
+
+class RecallRawInput(BaseModel):
+    """Input for the recall_raw tool — query raw tool call history."""
+    session_id: str = Field(default="", description="Session ID (default current session)")
+    limit: int = Field(default=50, ge=1, le=500, description="Maximum number of entries")
+    offset: int = Field(default=0, ge=0, description="Starting position")
+    tool_name: str = Field(default="", description="Filter by tool name")
+    status: Literal["", "success", "error"] = Field(default="", description="Filter by status")
+
+class LearnSessionInput(BaseModel):
+    """Input for the learn_session tool — analyze a session and extract behavioral patterns."""
+    session_id: str = Field(default="", description="Session ID to learn from (default current)")
+    user_id: Optional[str] = Field(default=None, description="User ID (default from config)")
+
+
 # ── Mapping: tool name → Pydantic model ─────────────────────────────────
 
 TOOL_INPUT_MODELS: dict[str, type[BaseModel]] = {
@@ -194,6 +249,12 @@ TOOL_INPUT_MODELS: dict[str, type[BaseModel]] = {
     "delete_session": DeleteSessionInput,
     "preserve_session_memories": PreserveSessionMemoriesInput,
     "resume_session": ResumeSessionInput,
+    "create_entity": CreateEntityInput,
+    "create_relation": CreateRelationInput,
+    "query_graph": QueryGraphInput,
+    "trace_entity": TraceEntityInput,
+    "recall_raw": RecallRawInput,
+    "learn_session": LearnSessionInput,
 }
 
 

@@ -172,7 +172,7 @@ async def test_timing():
     sess_store = SessionStore(config.session.db_path)
     await sess_store.initialize()
 
-    from memorymesh.mcp_server.handlers import ToolHandlers
+    from memorymesh.mcp_server.handlers.base import ToolHandlers
     handlers = ToolHandlers(manager, sess_store)
 
     sid = await sess_store.create_session(user_id="Shinn", workspace_path=tmpdir)

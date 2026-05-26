@@ -17,6 +17,8 @@ from .backend import MemoryBackend
 from .consolidation import ConsolidationEngine
 from .instinct_store import InstinctStore
 from .instinct import InstinctEngine
+from .graph_store import GraphStore
+from .context_manager import ContextManager
 from ..prompts import EXTRACT_METADATA_PROMPT
 from ..utils.json_parser import clean_and_parse_llm_json
 
@@ -63,13 +65,24 @@ class MemoryManager:
         self._consolidator = ConsolidationEngine(config, backend, router)
         self.instinct_store = InstinctStore(config.instinct.db_path)
         self.instinct_engine = InstinctEngine(config, backend, self.instinct_store)
+        self.graph: Optional[GraphStore] = None
+        self.context_manager: Optional[ContextManager] = None
         self._last_consolidation: dict[str, float] = {}
         self._last_fact_resolution: dict[str, float] = {}
         self._last_expiry: dict[str, float] = {}
         self._background_tasks: set[asyncio.Task] = set()
 
+    @staticmethod
+    async def _safe_task_wrapper(coro):
+        try:
+            await coro
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            logger.error("Background task failed: %s", e, exc_info=True)
+
     def _create_tracked_task(self, coro) -> asyncio.Task:
-        task = asyncio.create_task(coro)
+        task = asyncio.create_task(self._safe_task_wrapper(coro))
         self._background_tasks.add(task)
         task.add_done_callback(self._background_tasks.discard)
         return task
@@ -133,8 +146,15 @@ class MemoryManager:
         user_id: str = None,
         level: str = "user",
         workspace_path: Optional[str] = None,
+        background: bool = False,
     ) -> str:
-        """Add a memory with fast path, instinct suggestions, and background enrichment."""
+        """Add a memory with fast path, instinct suggestions, and background enrichment.
+
+        If background=True, saves raw text immediately with dummy embedding,
+        computes real embedding asynchronously, and returns memory_id.
+        The memory_id is valid immediately for FTS/browse, but won't appear
+        in vector ANN search until the background embedding completes.
+        """
         user_id = user_id or self.config.default_user_id
         if level not in ("user", "session", "knowledge"):
             raise ValidationError("level must be one of: user, session, knowledge")
@@ -148,15 +168,24 @@ class MemoryManager:
             try:
                 if self.instinct_store._db is None:
                     await self.instinct_store.initialize()
-                suggestions = await self.instinct_engine.apply_instincts(user_id, text, tags)
+                auto_tags = await self.instinct_engine.get_auto_apply_tags(
+                    user_id, text, workspace_path or "", tags
+                )
+                for t in auto_tags:
+                    if t not in tags:
+                        tags.append(t)
+                suggestions = await self.instinct_engine.apply_instincts(user_id, text, tags, workspace_path or "")
                 for s in suggestions.get("suggested_tags", []):
                     if s["tag"] not in tags and s["confidence"] > 0.5:
                         tags.append(s["tag"])
                         self._create_tracked_task(self.instinct_engine.reinforce_instinct(s["instinct_id"], success=True))
             except Exception as e:
-                logger.warning("Instinct suggestion failed: %s", e)
+                logger.error("Instinct suggestion failed: %s", e)
 
-        embedding = await get_embedding(text, self.config.embedding_model)
+        if background:
+            embedding = [0.0] * 384  # dummy — will be replaced
+        else:
+            embedding = await get_embedding(text, self.config.embedding_model)
 
         async with self._write_lock:
             metadata = {"importance": importance, "level": level}
@@ -171,7 +200,11 @@ class MemoryManager:
                 metadata=metadata,
                 level=level,
             )
-        logger.info("Memory saved: %s", memory_id)
+        logger.info("Memory saved: %s (background=%s)", memory_id, background)
+
+        # Phase 7.3: Compute real embedding in background for bulk ingestion
+        if background:
+            self._create_tracked_task(self._update_embedding_background(memory_id, text))
 
         # Background tasks with rate-limiting
         self._create_tracked_task(self._run_background_tasks(memory_id, text, level, user_id))
@@ -216,34 +249,62 @@ class MemoryManager:
 
         # FTS reconciliation no longer needed — vector + FTS in single ACID transaction
 
+    async def _update_embedding_background(self, memory_id: str, text: str):
+        """Phase 7.3: Compute real embedding in background and update vec table."""
+        max_attempts = 3
+        for attempt in range(1, max_attempts + 1):
+            try:
+                real_embedding = await get_embedding(text, self.config.embedding_model)
+                await self.backend.update_embedding(memory_id, real_embedding)
+                logger.info("Background embedding updated for %s", memory_id[:12])
+                return
+            except Exception as e:
+                if attempt < max_attempts:
+                    logger.warning("Background embedding attempt %d/%d failed for %s: %s", attempt, max_attempts, memory_id[:12], e)
+                    await asyncio.sleep(2.0 * attempt)
+                else:
+                    logger.error("Background embedding failed for %s after %d attempts: %s", memory_id[:12], max_attempts, e, exc_info=True)
+                    # Try to flag it in metadata so it's not permanently lost
+                    try:
+                        await self.backend.update_metadata(memory_id, {"embedding_failed": True})
+                    except Exception:
+                        pass
+
     async def _enrich_memory(self, memory_id: str, text: str, user_id: str):
         """Call LLM to get tags, importance, summary and merge with existing metadata."""
-        try:
-            existing = await self.backend._get_by_id_full(memory_id)
-            if not existing:
-                return
-            existing_meta = existing["metadata"]
-            existing_tags = set(existing_meta.get("tags", []) or [])
-            existing_imp = existing_meta.get("importance", 3)
+        max_attempts = 2
+        for attempt in range(1, max_attempts + 1):
+            try:
+                existing = await self.backend._get_by_id_full(memory_id)
+                if not existing:
+                    return
+                existing_meta = existing["metadata"]
+                existing_tags = set(existing_meta.get("tags", []) or [])
+                existing_imp = existing_meta.get("importance", 3)
 
-            prompt = EXTRACT_METADATA_PROMPT.format(content=text)
-            response = await self.router.call_llm_background(prompt, json_mode=True)
-            meta = clean_and_parse_llm_json(response)
-            update = {}
-            if "tags" in meta and isinstance(meta["tags"], list):
-                merged_tags = list(existing_tags | set(meta["tags"]))
-                update["tags"] = merged_tags
-            if "importance" in meta and isinstance(meta["importance"], int):
-                update["importance"] = max(existing_imp, meta["importance"])
-            if "summary" in meta and isinstance(meta["summary"], str):
-                update["summary"] = meta["summary"]
-            if update:
-                await self.backend.update_metadata(memory_id, update)
-                logger.info("Enrichment merged for %s: %s", memory_id, update)
-            else:
-                logger.info("Enrichment produced no usable fields for %s: %s", memory_id, meta)
-        except Exception as e:
-            logger.error("Enrichment failed for %s: %s", memory_id, e)
+                prompt = EXTRACT_METADATA_PROMPT.format(content=text)
+                response = await self.router.call_llm_background(prompt, json_mode=True)
+                meta = clean_and_parse_llm_json(response)
+                update = {}
+                if "tags" in meta and isinstance(meta["tags"], list):
+                    merged_tags = list(existing_tags | set(meta["tags"]))
+                    update["tags"] = merged_tags
+                if "importance" in meta and isinstance(meta["importance"], int):
+                    update["importance"] = max(existing_imp, meta["importance"])
+                if "summary" in meta and isinstance(meta["summary"], str):
+                    update["summary"] = meta["summary"]
+                if update:
+                    await self.backend.update_metadata(memory_id, update)
+                    logger.info("Enrichment merged for %s: %s", memory_id, update)
+                else:
+                    logger.info("Enrichment produced no usable fields for %s: %s", memory_id, meta)
+                return  # success — exit early
+            except Exception as e:
+                if attempt < max_attempts:
+                    logger.warning("Enrichment attempt %d/%d failed for %s: %s", attempt, max_attempts, memory_id, e)
+                    await asyncio.sleep(0.5 * attempt)
+                else:
+                    logger.error("Enrichment failed for %s after %d attempts: %s", memory_id, max_attempts, e, exc_info=True)
 
     async def _maybe_expire_memories(self, user_id: str):
         """Smart memory decay for low-importance ephemeral memories, non-blocking."""
@@ -252,7 +313,7 @@ class MemoryManager:
             if expired:
                 _log_bg("Decay", f"Expired {expired} ephemeral memories for {user_id}", emoji="")
         except Exception as e:
-            logger.warning("Memory decay failed for user %s: %s", user_id, e)
+            logger.error("Memory decay failed for user %s: %s", user_id, e)
 
     async def _maybe_consolidate(self, user_id: str):
         """Run consolidation if enabled, non-blocking."""
@@ -277,7 +338,7 @@ class MemoryManager:
         try:
             await self.instinct_engine.learn_from_recent(user_id)
         except Exception as e:
-            logger.warning("Instinct learning failed for user %s: %s", user_id, e)
+            logger.error("Instinct learning failed for user %s: %s", user_id, e)
 
     @staticmethod
     def _extract_query_keywords(query: str) -> str:
@@ -318,7 +379,8 @@ class MemoryManager:
                     "score": r.get("score", 0.0),
                 })
             return enriched
-        except Exception:
+        except Exception as e:
+            logger.error("FTS enrichment failed for %d results: %s", len(fts_results), e, exc_info=True)
             return [{**r, "metadata": {}} for r in fts_results]
 
     async def search_with_fallback(
@@ -356,7 +418,7 @@ class MemoryManager:
                     results = self._dicts_to_search_results(tier2_filtered[:top_k])
                     return results, "fts_keyword", {}
             except Exception as e:
-                logger.warning("Tier 2 FTS failed: %s", e)
+                logger.error("Tier 2 FTS failed: %s", e)
 
         # Tier 3: Chronological scan — always has results
         try:
@@ -367,7 +429,7 @@ class MemoryManager:
                 results = self._dicts_to_search_results(tier3_filtered[:top_k])
                 return results, "chronological", {}
         except Exception as e:
-            logger.warning("Tier 3 chronological fallback failed: %s", e)
+            logger.error("Tier 3 chronological fallback failed: %s", e)
 
         return [], "empty", {}
 

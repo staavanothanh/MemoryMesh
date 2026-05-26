@@ -16,6 +16,8 @@ import aiosqlite
 import sqlite_vec
 import numpy as np
 
+from .graph_store import GraphStore
+
 logger = logging.getLogger(__name__)
 
 DIM = 384
@@ -92,6 +94,7 @@ class SqliteVecBackend:
     def __init__(self, db_path: str):
         self.db_path = db_path
         self._db: Optional[aiosqlite.Connection] = None
+        self.graph: Optional[GraphStore] = None
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -121,7 +124,9 @@ class SqliteVecBackend:
         await self._db.execute("PRAGMA cache_size = -20000")
         await self._db.execute("PRAGMA mmap_size = 268435456")
         await self._db.execute("PRAGMA temp_store = MEMORY")
+        self.graph = GraphStore(self._db)
         await self._create_schema()
+        await self.graph.create_schema()
         await self._db.commit()
         logger.info("SqliteVecBackend initialized at %s", self.db_path)
 
@@ -156,6 +161,13 @@ class SqliteVecBackend:
         )
         await self._db.execute(
             "CREATE INDEX IF NOT EXISTS idx_mem_deleted ON memories(user_id, deleted)"
+        )
+        # Phase 6: Composite indexes for dynamic scoring with keyset pagination
+        await self._db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_mem_score ON memories(importance DESC, created_at DESC, id)"
+        )
+        await self._db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_mem_user_score ON memories(user_id, importance DESC, created_at DESC, id)"
         )
         # Table 2: vector ANN (sqlite-vec) — created lazily on first add() with correct DIM
         # Table 3: FTS5 full-text search
@@ -337,6 +349,23 @@ class SqliteVecBackend:
         )
         await self._db.commit()
         return True
+
+    async def update_embedding(self, memory_id: str, embedding: List[float]) -> bool:
+        """Phase 7.3: Update the vector embedding for an existing memory (background)."""
+        from .sqlite_vec_backend import normalize_l2
+        normalized = normalize_l2(embedding)
+        import numpy as np
+        vec_bytes = np.array(normalized, dtype=np.float32).tobytes()
+        try:
+            await self._db.execute(
+                "UPDATE vec_memories SET embedding = ? WHERE memory_id = ?",
+                (vec_bytes, memory_id),
+            )
+            await self._db.commit()
+            return True
+        except Exception as e:
+            logger.error("Embedding update failed for %s: %s", memory_id[:12], e)
+            return False
 
     # ------------------------------------------------------------------
     # Metadata-only update (no content change — used by consolidate/expire)

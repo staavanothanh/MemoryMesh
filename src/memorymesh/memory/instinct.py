@@ -104,11 +104,75 @@ class InstinctEngine:
             logger.info("Learned keyword instinct %s: '%s' -> tag '%s' (confidence=%.2f)",
                         instinct_id, word, best_tag, confidence)
 
+    async def learn_workflow_patterns(self, user_id: str, tool_sequences: List[List[str]], workspace_path: str = ""):
+        active_count = await self.store.count_active(user_id)
+        if active_count >= MAX_INSTINCTS_PER_USER:
+            return
+
+        sequence_counter: Dict[str, int] = Counter()
+        for seq in tool_sequences:
+            if len(seq) >= 2:
+                key = " → ".join(seq[-3:])
+                sequence_counter[key] += 1
+
+        existing = await self.store.get_active_instincts(user_id)
+        existing_conditions = {json.dumps(e["condition"]) for e in existing}
+
+        for seq_str, count in sequence_counter.items():
+            if count < 2:
+                continue
+            tools = seq_str.split(" → ")
+            condition = {"type": "workflow", "sequence": tools}
+            if json.dumps(condition) in existing_conditions:
+                continue
+            confidence = min(0.8, 0.2 + count * 0.2)
+            instinct_id = await self.store.add_instinct(
+                user_id=user_id,
+                condition=condition,
+                action={"type": "suggest_workflow", "sequence": tools},
+                confidence=round(confidence, 4),
+                workspace_path=workspace_path,
+            )
+            logger.info("Learned workflow instinct %s: %s (count=%d, confidence=%.2f)",
+                        instinct_id, seq_str, count, confidence)
+
+    async def get_auto_apply_tags(self, user_id: str, content: str, workspace_path: str = "", current_tags: Optional[List[str]] = None) -> List[str]:
+        instincts = await self.store.get_active_instincts(user_id)
+        auto_tags = []
+        current = {t.lower() for t in (current_tags or [])}
+
+        for inst in instincts:
+            if inst["confidence"] < 0.8:
+                continue
+            cond = inst["condition"]
+            action = inst["action"]
+            if action.get("type") != "suggest_tag":
+                continue
+
+            cond_type = cond.get("type")
+            suggested_tag = action.get("tag", "").lower()
+            if not suggested_tag or suggested_tag in current:
+                continue
+
+            if cond_type == "tag_frequency":
+                inst_ws = inst.get("workspace_path", "")
+                if inst_ws and workspace_path and inst_ws != workspace_path:
+                    continue
+                auto_tags.append(suggested_tag)
+
+            elif cond_type == "keyword":
+                words = cond.get("words", [])
+                content_lower = content.lower()
+                if any(w.lower() in content_lower for w in words):
+                    auto_tags.append(suggested_tag)
+
+        return auto_tags
+
     async def apply_instincts(
-        self, user_id: str, content: str, tags: Optional[List[str]] = None
+        self, user_id: str, content: str, tags: Optional[List[str]] = None, workspace_path: str = ""
     ) -> Dict[str, Any]:
         """Apply applicable instincts to a memory and return suggested modifications."""
-        instincts = await self.store.get_active_instincts(user_id)
+        instincts = await self.store.get_active_instincts_scoped(user_id, workspace_path)
         suggestions = {"suggested_tags": [], "confidence": 0.0}
         current_tags = {t.lower() for t in (tags or [])}
 

@@ -2,6 +2,7 @@
 
 import json
 import uuid
+import zlib
 import logging
 from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any
@@ -69,11 +70,30 @@ class SessionStore:
                 FOREIGN KEY (session_id) REFERENCES sessions(session_id)
             )
         """)
+        await self._db.execute("""
+            CREATE TABLE IF NOT EXISTS raw_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now')),
+                session_id TEXT NOT NULL,
+                tool_name TEXT NOT NULL,
+                input_payload BLOB,
+                output_payload BLOB,
+                is_compressed INTEGER DEFAULT 1,
+                execution_time_ms REAL,
+                status TEXT CHECK(status IN ('success', 'error'))
+            )
+        """)
         await self._db.execute(
             "CREATE INDEX IF NOT EXISTS idx_context_log_session ON context_log(session_id)"
         )
         await self._db.execute(
             "CREATE INDEX IF NOT EXISTS idx_sessions_user_status ON sessions(user_id, status)"
+        )
+        await self._db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_raw_log_session_time ON raw_log(session_id, timestamp)"
+        )
+        await self._db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_raw_log_tool ON raw_log(tool_name, timestamp)"
         )
         await self._migrate_sessions_schema()
         await self._db.commit()
@@ -234,3 +254,48 @@ class SessionStore:
         )
         row = await cursor.fetchone()
         return row["cnt"] if row else 0
+
+    async def get_raw_log(self, session_id: str, limit: int = 50, offset: int = 0) -> List[Dict[str, Any]]:
+        cursor = await self._db.execute(
+            "SELECT id, timestamp, session_id, tool_name, is_compressed, execution_time_ms, status FROM raw_log WHERE session_id = ? ORDER BY id DESC LIMIT ? OFFSET ?",
+            (session_id, limit, offset),
+        )
+        rows = await cursor.fetchall()
+        return [dict(r) for r in rows]
+
+    async def get_raw_log_detail(self, log_id: int) -> Optional[Dict[str, Any]]:
+        cursor = await self._db.execute(
+            "SELECT * FROM raw_log WHERE id = ?", (log_id,)
+        )
+        row = await cursor.fetchone()
+        if not row:
+            return None
+        d = dict(row)
+        if d.get("is_compressed") and d.get("input_payload"):
+            try:
+                d["input_payload"] = zlib.decompress(d["input_payload"]).decode("utf-8")
+            except Exception:
+                pass
+        if d.get("is_compressed") and d.get("output_payload"):
+            try:
+                d["output_payload"] = zlib.decompress(d["output_payload"]).decode("utf-8")
+            except Exception:
+                pass
+        return d
+
+    async def search_raw_log(self, tool_name: str = "", status: str = "", limit: int = 50) -> List[Dict[str, Any]]:
+        conditions = []
+        params = []
+        if tool_name:
+            conditions.append("tool_name = ?")
+            params.append(tool_name)
+        if status:
+            conditions.append("status = ?")
+            params.append(status)
+        where = " AND ".join(conditions) if conditions else "1=1"
+        cursor = await self._db.execute(
+            f"SELECT id, timestamp, session_id, tool_name, is_compressed, execution_time_ms, status FROM raw_log WHERE {where} ORDER BY id DESC LIMIT ?",
+            (*params, limit),
+        )
+        rows = await cursor.fetchall()
+        return [dict(r) for r in rows]

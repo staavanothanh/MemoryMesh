@@ -170,7 +170,7 @@ class TestResumeSessionInput:
 
 
 class TestToolInputModelsMapping:
-    """Verify all 18 tools have corresponding Pydantic models."""
+    """Verify all tools have corresponding Pydantic models."""
 
     EXPECTED_TOOLS = {
         "remember", "recall", "forget", "archive_memory", "unarchive_memory",
@@ -178,6 +178,9 @@ class TestToolInputModelsMapping:
         "save_context_pair", "list_sessions", "get_session_context",
         "new_session", "end_session", "save_workspace_context",
         "delete_session", "preserve_session_memories", "resume_session",
+        "create_entity", "create_relation", "query_graph", "trace_entity",
+        "recall_raw",
+        "learn_session",
     }
 
     def test_all_tools_have_models(self):
