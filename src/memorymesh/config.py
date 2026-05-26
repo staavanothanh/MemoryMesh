@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import Literal, Optional
+from typing import Literal, Optional, List
 import os
 from dotenv import load_dotenv
 
@@ -8,7 +8,7 @@ class RouterConfig:
     url: str = "http://127.0.0.1:20128/v1"
     default_model: str = "deepseek-v4-flash"
     fallback_model: str = "deepseek-v4-pro"
-    background_model_pool: list = None
+    background_model_pool: Optional[List[str]] = None
     timeout_s: int = 30
     max_retries: int = 3
 
@@ -29,11 +29,11 @@ class SqliteVecConfig:
 # Deprecated — kept for migration script only
 @dataclass
 class SessionStartConfig:
-    instruction_file_priority: Optional[list] = None
+    instruction_file_priority: Optional[List[str]] = None
     instructions_dir: str = ".memorymesh/instructions/"
     global_instruction_file: str = ""
     docs_sync_enabled: bool = True
-    docs_sync_files: Optional[list] = None
+    docs_sync_files: Optional[List[str]] = None
     max_file_size: int = 51200
 
 

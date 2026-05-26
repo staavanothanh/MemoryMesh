@@ -1,6 +1,8 @@
 import asyncio
 import logging
 import math
+import os
+import re
 import time
 from datetime import datetime, timezone
 from typing import List, Dict, Tuple, Optional
@@ -20,6 +22,7 @@ from .instinct import InstinctEngine
 from .graph_store import GraphStore
 from .context_manager import ContextManager
 from ..prompts import EXTRACT_METADATA_PROMPT
+from .sqlite_vec_backend import DIM
 from ..utils.json_parser import clean_and_parse_llm_json
 
 _MAGENTA = "\033[1;35m"
@@ -73,7 +76,7 @@ class MemoryManager:
         self._background_tasks: set[asyncio.Task] = set()
 
     @staticmethod
-    async def _safe_task_wrapper(coro):
+    async def _safe_task_wrapper(coro) -> None:
         try:
             await coro
         except asyncio.CancelledError:
@@ -112,7 +115,6 @@ class MemoryManager:
             return True
         if normalized_mem.startswith(normalized_cur + "/"):
             return True
-        import os
         if os.path.dirname(normalized_mem) == os.path.dirname(normalized_cur):
             return True
         return False
@@ -143,7 +145,7 @@ class MemoryManager:
         text: str,
         tags: Optional[List[str]] = None,
         importance: int = 3,
-        user_id: str = None,
+        user_id: Optional[str] = None,
         level: str = "user",
         workspace_path: Optional[str] = None,
         background: bool = False,
@@ -183,7 +185,7 @@ class MemoryManager:
                 logger.error("Instinct suggestion failed: %s", e)
 
         if background:
-            embedding = [0.0] * 384  # dummy — will be replaced
+            embedding = [0.0] * DIM  # dummy — will be replaced
         else:
             embedding = await get_embedding(text, self.config.embedding_model)
 
@@ -352,7 +354,6 @@ class MemoryManager:
             "guong", "ma", "roi", "thu", "nha", "khong",
             "continue", "continues", "continued",
         }
-        import re
         words = re.findall(r"[a-zA-ZÀ-ỹ]+", query.lower())
         meaningful = [w for w in words if w not in QUESTION_WORDS and len(w) >= 3]
         return " ".join(meaningful[:5])
@@ -387,7 +388,7 @@ class MemoryManager:
         self,
         query: str,
         top_k: int = 5,
-        user_id: str = None,
+        user_id: Optional[str] = None,
         workspace_path: Optional[str] = None,
         max_tokens: Optional[int] = None,
         min_score_threshold: float = 0.25,
@@ -490,7 +491,7 @@ class MemoryManager:
         self,
         query: str,
         top_k: int = 5,
-        user_id: str = None,
+        user_id: Optional[str] = None,
         level_filter: Optional[List[str]] = None,
         workspace_path: Optional[str] = None,
         max_tokens: Optional[int] = None,
@@ -648,7 +649,7 @@ class MemoryManager:
         return success
 
     async def list_memories(
-        self, limit: int = 100, offset: int = 0, user_id: str = None
+        self, limit: int = 100, offset: int = 0, user_id: Optional[str] = None
     ) -> List[MemoryRecord]:
         """List memories for a user (archived filter pushed to SQL)."""
         user_id = user_id or self.config.default_user_id

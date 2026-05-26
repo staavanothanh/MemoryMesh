@@ -10,263 +10,175 @@
   <img src="https://img.shields.io/badge/Python-3.12+-blue?style=for-the-badge&logo=python" alt="Python Version">
   <img src="https://img.shields.io/badge/Database-SQLite--vec-orange?style=for-the-badge&logo=sqlite" alt="Database">
   <img src="https://img.shields.io/badge/License-MIT-yellow?style=for-the-badge" alt="License">
+  <img src="https://img.shields.io/badge/Version-0.5.0-purple?style=for-the-badge" alt="Version 0.5.0">
 </p>
 
-**Máy chủ MCP bộ nhớ bền vững (persistent memory), ưu tiên máy cục bộ (local-first) cho các AI agent.**
-Tìm kiếm kết hợp (vector + FTS5) trong một cơ sở dữ liệu SQLite duy nhất, truy xuất xuyên phiên (cross-session recall) qua các công cụ MCP.
+**Máy chủ MCP bộ nhớ bền vững (persistent memory), ưu tiên máy cục bộ (local-first) cho các AI agent.** v0.5.0 mang đến Đồ thị tri thức (Knowledge Graph), Học tập hành vi (Behavioral Learning), Tự động hóa vòng đời (Lifecycle Automation), và Quản lý ngữ cảnh động (Dynamic Context Management).
 
 ## Quick Start
 
 ```bash
-# Clone & vào thư mục
-git clone https://github.com/staavanothanh/MemoryMesh.git
-cd MemoryMesh
+# Cài đặt bản rút gọn (dùng API embedding từ xa)
+pip install memorymesh
+# Hoặc với mô hình nhúng cục bộ (khuyên dùng cho chế độ offline)
+pip install "memorymesh[local]"
 
-# Tạo venv & cài đặt
-python -m venv .venv
-source .venv/bin/activate        # Linux/macOS
-# .venv\Scripts\activate         # Windows
-
-pip install -e ".[test]"         # cài đặt kèm test deps
-python -m memorymesh init         # thiết lập một lệnh (tạo .env, cấu hình MCP)
-
-# Khởi động OpenCode — MCP server tự động khởi chạy
+python -m memorymesh init   # thiết lập một lệnh
 opencode
 ```
 
-Hoặc từng bước:
+### Công cụ CLI
 
 ```bash
-pip install -e ".[test]"
-cp .env.example .env             # cấu hình endpoint LLM của bạn
-python -m memorymesh             # khởi động MCP server độc lập
+memorymesh sessions --limit 20   # liệt kê các phiên gần đây
+memorymesh stats                 # hiển thị thống kê hệ thống
+memorymesh init                  # khởi động workspace
 ```
 
-> [!NOTE]
-> Ở lần chạy đầu tiên, MemoryMesh sẽ tự động tải mô hình nhúng `sentence-transformers` (~100–300 MB) vào bộ nhớ đệm cục bộ. Quá trình này có thể mất 1–2 phút tùy thuộc vào kết nối mạng của bạn.
+## Có gì mới trong v0.5.0
+
+| Tính năng | Mô tả |
+|---------|-------------|
+| **🧠 Đồ thị tri thức** | Các thực thể/quan hệ SQLite với `trace_entity`, `query_graph`, `create_entity`, `create_relation`. Recursive CTE cho suy luận đa chặng. Đầu ra XML Triplet. An toàn cho chế độ Plan/Read-Only. |
+| **📜 Lịch sử nguyên bản (Lossless)** | Ghi nhật ký công cụ nguyên văn với nén zlib qua AsyncBatchLogger. Truy xuất với `recall_raw` — không còn mất ngữ cảnh do nén. |
+| **🤖 Học tập hành vi (Bản năng v2)** | RAM cache với regex tiền biên dịch cho khớp O(1). Trích xuất mẫu workflow N-gram. Tự động áp dụng tag khi độ tin cậy > 0.8. Bản năng theo phạm vi dự án. |
+| **⚡ Tự động hóa vòng đời** | Context Delta nén (<800 tokens) khi tự động recall. Tóm tắt lười biếng (Orphan Recovery) cho các cột mốc bị thiếu. Idle watchdog (15 phút). |
+| **📄 Quản lý ngữ cảnh động** | Phân trang Keyset (cursor). Điểm số động đẩy vào SQLite CTEs. Đếm token đa luồng. |
+| **🔧 Giảm tải Embedding** | Core nhẹ: `pip install memorymesh` (không PyTorch). Tùy chọn `[local]` cho SentenceTransformer. Hoặc dùng API embedding từ xa. |
+| **🛡️ Tính vững chắc** | `_safe_task_wrapper` cho mọi tác vụ nền. Retry với exponential backoff. Phát hiện lỗi im lặng & ghi log ở mức `ERROR`. |
 
 ## Kiến trúc
 
 ```mermaid
 graph TD
-    User([User / Client]) --> Client[Any MCP Client]
-    Client --> LLM[LLM qua Router]
-    
-    subgraph MemoryMesh [MemoryMesh MCP Server]
-        MM[Core Engine] -->|1. Ngữ nghĩa| SV[(sqlite-vec ANN)]
-        MM -->|2. Từ khóa| FTS[(FTS5 Search)]
-        MM -->|3. Kết hợp| RRF[RRF Fusion Ranker]
+    LLM[Agent / LLM] -->|call_tool| MM[MemoryMesh MCP Server]
+
+    subgraph MM[MemoryMesh Server]
+        VEC[(sqlite-vec ANN)] --- FTS[(FTS5 Full-Text)]
+        VEC --- G[(Đồ thị tri thức entities/relations)]
+        RAW[(Lịch sử nguyên bản Log)] --- SESS[(Lưu trữ Phiên)]
+        INST[(RAM Cache Bản năng)] --- MIDDLEWARE[Tool Execution Middleware]
     end
 
-    LLM -->|recall| MM
-    LLM -->|commit_milestone| FE[Milestone Commit + Fact Extraction]
+    MM -->|recall(query, cursor?)| LLM
+    LLM -->|create_entity / create_relation| G
 ```
 
 **Thiết kế chính:**
-- Ngữ cảnh phiên bắt đầu trống; LLM gọi `recall` theo yêu cầu (dynamic recall)
-- Một DB SQLite duy nhất với sqlite-vec cho tìm kiếm vector + FTS5 cho từ khóa
-- Các tác vụ nền (enrichment, consolidation, trích xuất sự kiện) được giới hạn tốc độ
-- Ký ức cấp phiên tự động hết hạn sau 7 ngày
+- SQLite đơn với sqlite-vec cho tìm kiếm vector + FTS5 cho từ khóa + Bảng đồ thị cho các mối quan hệ.
+- Các tác vụ nền (enrichment, consolidation, trích xuất sự kiện) được giới hạn tốc độ với tự động retry.
+- Ký ức cấp phiên tự động hết hạn sau 7 ngày.
+- Mọi tác vụ nền được bao bọc trong `_safe_task_wrapper` — không có lỗi im lặng.
+
+### 22 Công cụ MCP
+
+| Phân loại | Công cụ |
+|----------|-------|
+| **Bộ nhớ** | `remember`, `recall`, `forget`, `archive_memory`, `unarchive_memory`, `list_memories` |
+| **Đồ thị tri thức** | `create_entity`, `create_relation`, `query_graph`, `trace_entity` |
+| **Vòng đời phiên** | `new_session`, `end_session`, `resume_session`, `delete_session`, `list_sessions`, `get_session_context`, `save_system_prompt`, `preserve_session_memories` |
+| **Workspace** | `commit_milestone`, `save_workspace_context` |
+| **Học tập** | `learn_session`, `recall_raw` |
+| **Tiện ích** | `ping` |
 
 ### Tinh hoa ẩn (Hidden Gems)
 
-MemoryMesh chứa đựng những quyết định kiến trúc tinh tế được thiết kế để AI hoạt động như một đồng nghiệp con người:
+- **Ngữ cảnh tức thời (Optimistic Hydration):** Tính toán trước các mỏ neo ngữ nghĩa trước khi đóng phiên. Lưu trong RAM Cache — AI lấy lại ngữ cảnh trong `<5ms`.
+- **Truy xuất 3 tầng dự phòng:** 1. Ngữ nghĩa (sqlite-vec) → 2. FTS5 từ khóa → 3. Quét thời gian. Không có "ảo giác do mất trí nhớ".
+- **Cơ chế điểm nghẽn (Choke Point):** Sau 5+ action chưa commit, `recall` bị chặn cho đến khi gọi `commit_milestone`. Ngăn tràn ngữ cảnh.
+- **GraphRAG qua SQLite CTE:** Duyệt quan hệ đa chặng dùng SQL `WITH RECURSIVE` — không cần DB đồ thị ngoài.
+- **Tiêm Bản năng JIT:** Middleware thực thi công cụ với cửa sổ trượt (deque maxlen=5). Khớp với bản năng regex tiền biên dịch trong micro giây.
+- **Phân trang hỗn hợp:** Phân trang Keyset với điểm số động đẩy vào SQLite — hiệu suất trang sâu O(1).
 
-- **Ngữ cảnh tức thời (Optimistic Hydration):** Thay vì bắt bạn đợi tìm kiếm vector khi mở lại dự án cũ, MemoryMesh tính toán trước các "mỏ neo ngữ nghĩa" (semantic anchors) ngay trước khi phiên làm việc kết thúc. Chúng được lưu trong RAM Cache, giúp AI lấy lại toàn bộ ngữ cảnh của phiên trước trong `<5ms` — trước cả khi bạn gõ xong câu lệnh đầu tiên.
-- **Trí tuệ xuyên dự án (Soft Penalty):** MemoryMesh không dùng ranh giới cứng giữa các dự án. Nó dùng cơ chế *Soft Penalty* (phạt mềm). Nếu bạn sửa một bug Docker phức tạp trong `Dự án A` và sau đó hỏi về Docker trong `Dự án B`, MemoryMesh phạt nhẹ ký ức của `Dự án A` nhưng vẫn hiển thị chúng nếu có liên quan cao. AI học toàn cục nhưng ưu tiên cục bộ.
-- **Truy xuất 3 tầng dự phòng:** Cơ sở dữ liệu vector rất giỏi về ngữ nghĩa nhưng rất kém trong việc tìm tên biến hay UUID cụ thể. MemoryMesh không chỉ dựa vào vector. Nó xếp tầng qua 3 lớp:
-  1. *Tìm kiếm ngữ nghĩa* (sqlite-vec)
-  2. *Tìm kiếm toàn văn* (FTS5 keyword matching)
-  3. *Quét thời gian* (nhật ký gần đây)
-  Điều này đảm bảo không có "ảo giác do mất trí nhớ" — nếu dữ liệu tồn tại, nó sẽ được tìm thấy.
-
-## Quản lý Chi phí & Kiến trúc Hai-LLM
-
-MemoryMesh sử dụng **hai tầng LLM độc lập** để tách biệt hiệu suất tương tác khỏi chi phí nền:
-
-| Tầng | Biến môi trường | Model điển hình | Mục đích |
-|------|-----------------|-----------------|----------|
-| **Foreground (Chat)** | `DEFAULT_MODEL` / `FALLBACK_MODEL` | GPT-5.5, Claude 4.7 Opus, Gemini 3.5 Flash, DeepSeek V4-Pro | Tương tác trực tiếp với người dùng qua MCP client |
-| **Background (Dữ liệu)** | `BACKGROUND_MODEL_POOL` | Gemini 2.5 Flash, Llama 3.1 8B, DeepSeek V4 Flash | Snapshot bootstrap, trích xuất sự kiện nguyên tử, nén phiên |
-
-### Cách hoạt động
-- **Model chat chính** xử lý mọi suy luận hướng đến người dùng — chọn model tốt nhất bạn có thể chi trả.
-- **Tác vụ nền** (trích xuất sự kiện, tạo snapshot, nén) chạy trên một nhóm model *miễn phí hoặc giá rẻ* riêng được định nghĩa trong `BACKGROUND_MODEL_POOL`. Nhóm này dùng **chiến lược xếp tầng (cascade)**: nếu model đầu tiên thất bại, nó tự động thử model tiếp theo trong danh sách.
-- Nếu `BACKGROUND_MODEL_POOL` trống, các tác vụ nền sẽ dự phòng về model chat chính.
-
-### Chế độ Kinh tế (Economy Mode)
-Đặt `AUTO_EXTRACT_FACTS=false` trong file `.env` của bạn để tắt hoàn toàn việc trích xuất sự kiện nguyên tử tự động. Điều này loại bỏ các cuộc gọi LLM nền (chi phí token bằng không) trong khi vẫn giữ kho lưu trữ mạch tường thuật (narrative-thread) và truy xuất xuyên phiên hoạt động đầy đủ.
-
-## Đa Agent & Đồng bộ Xuyên Thiết bị
-
-MemoryMesh được thiết kế với kiến trúc sẵn sàng cho tương lai xoay quanh biến môi trường `DEFAULT_USER_ID`. Điều này mở ra những quy trình làm việc thực tế mạnh mẽ:
-
-### 1. Chia sẻ Đa Agent
-Nếu bạn dùng nhiều trợ lý AI (ví dụ: OpenCode, Cline, Cursor) trên cùng một máy, chúng có thể:
-- **Chia sẻ ký ức:** Trỏ tất cả về cùng `VEC_DB_PATH` và dùng chung `DEFAULT_USER_ID`. Chúng sẽ hoạt động như một bộ não tập thể, chia sẻ ngữ cảnh liền mạch.
-- **Cô lập ký ức:** Giữ cùng database nhưng đặt `DEFAULT_USER_ID=opencode` cho một agent và `DEFAULT_USER_ID=cline` cho agent kia. Chúng dùng chung file vật lý nhưng hoàn toàn cách ly về mặt tư duy.
-
-### 2. Phân tách Vai trò / Cá tính
-Là một lập trình viên, bạn có thể có nhiều vai trò khác nhau. Bạn có thể cô lập ngữ cảnh mà không cần chạy nhiều database:
-- Đặt `DEFAULT_USER_ID=work_profile` cho dự án công ty (giữ các quy ước doanh nghiệp được cô lập nghiêm ngặt).
-- Đặt `DEFAULT_USER_ID=personal_profile` cho các dự án cá nhân cuối tuần.
-
-### 3. Đồng bộ Xuyên Thiết bị
-Vì MemoryMesh dùng một cơ sở dữ liệu SQLite đơn, di động, bạn có thể đặt thư mục `db/` vào Google Drive, Dropbox, hoặc ổ mạng.
-Bằng cách đặt cùng `DEFAULT_USER_ID` trên laptop công ty và máy tính ở nhà, các AI agent của bạn sẽ đồng bộ trạng thái bộ nhớ xuyên suốt các máy vật lý một cách liền mạch.
-
-## Thiết lập
+## Cài đặt
 
 ### Yêu cầu
 - Python **3.12+**
-- Một endpoint LLM tương thích OpenAI (Ollama, vLLM, OpenAI, 9Router, v.v.)
+- Một endpoint LLM tương thích OpenAI
+
+### Cài đặt rút gọn (Remote Embedding)
+```bash
+pip install memorymesh
+```
+Core chỉ ~50MB. Embedding tính toán qua API từ xa.
+
+### Cài đặt đầy đủ (Local Embedding)
+```bash
+pip install "memorymesh[local]"
+```
+Bao gồm `sentence-transformers` (~1.5GB). Embedding tính toán cục bộ — hoàn toàn offline.
+
+### Với CLI (Bảng Rich)
+```bash
+pip install "memorymesh[cli]"
+```
+
+### Phát triển
+```bash
+pip install -e ".[test,local,cli]"
+```
 
 ### Môi trường
 
 Sao chép `.env.example` thành `.env` và chỉnh sửa:
 
-```bash
-cp .env.example .env
-```
-
-| Biến môi trường | Mặc định | Mô tả |
-|-----------------|----------|-------|
-| `ROUTER_URL` | `http://127.0.0.1:20128/v1` | Endpoint LLM |
+| Biến | Mặc định | Mô tả |
+|----------|---------|-------------|
+| `ROUTER_URL` | `http://127.0.0.1:20128/v1` | LLM endpoint |
 | `DEFAULT_MODEL` | `your-model` | Model LLM chính |
-| `BACKGROUND_MODEL_POOL` | — | Danh sách model miễn phí/rẻ cách nhau bằng dấu phẩy cho tác vụ nền |
-| `EMBEDDING_MODEL` | `paraphrase-multilingual-MiniLM-L12-v2` | Model nhúng (embedding) |
-| `VEC_DB_PATH` | `./db/memory.db` | Đường dẫn cơ sở dữ liệu SQLite |
-| `AUTO_EXTRACT_FACTS` | `true` | Đặt thành `false` để tắt trích xuất sự kiện tự động (Economy Mode) |
+| `BACKGROUND_MODEL_POOL` | — | Danh sách model nền (phẩy) |
+| `EMBEDDING_MODE` | `local` | `local` hoặc `remote` |
+| `EMBEDDING_MODEL` | `paraphrase-multilingual-MiniLM-L12-v2` | Model nhúng cục bộ |
+| `VEC_DB_PATH` | `./db/memory.db` | Đường dẫn SQLite |
+| `AUTO_EXTRACT_FACTS` | `true` | Tắt trích xuất sự kiện tự động |
 | `DEFAULT_USER_ID` | `your_user_id` | Người dùng mặc định |
-| `MCP_TRANSPORT` | `stdio` | `stdio` hoặc `sse` |
-| `MCP_PORT` | `8090` | Cổng SSE |
-| `SESSION_INSTRUCTION_FILES` | `opencode.md,CLAUDE.md,...` | Danh sách ưu tiên file hướng dẫn (cách nhau bằng dấu phẩy) tự động tải đầu mỗi phiên. File đầu tiên được tìm thấy sẽ được dùng. |
-| `SESSION_INSTRUCTIONS_DIR` | `.memorymesh/instructions/` | Thư mục chứa các file hướng dẫn (mọi file `.md`/`.txt` được gộp lại, sắp xếp theo thứ tự) |
-| `SESSION_GLOBAL_INSTRUCTION` | `""` | File hướng dẫn toàn cục cho người dùng (hỗ trợ `~` expansion) |
-| `SESSION_INSTRUCTION_MAX_FILE_SIZE` | `51200` | Kích thước file tối đa (bytes) cho file hướng dẫn/docs |
-| `SESSION_DOCS_SYNC_ENABLED` | `true` | Đặt thành `false` để tắt tự động đồng bộ tài liệu dự án vào bộ nhớ |
-| `SESSION_DOCS_SYNC_FILES` | `README.md,...` | Danh sách file tài liệu (cách nhau bằng dấu phẩy) được đồng bộ thành ký ức tham chiếu |
 
-### Sử dụng với CLI Agent
+## Tham chiếu CLI
 
-MemoryMesh là một **máy chủ MCP** — tương thích với mọi MCP client.
-MemoryMesh **Zero-Config cho AI Agent** — mọi hướng dẫn vận hành đều được nhúng sẵn trong phần mô tả công cụ MCP (không cần file hướng dẫn riêng):
+### `memorymesh sessions`
+Liệt kê phiên gần đây với trạng thái, workspace, dấu thời gian.
 
-| Agent | Thiết lập |
-|-------|-----------|
-| **OpenCode** | `python -m memorymesh init` tự động tạo `.opencode/opencode.json`. Mọi hướng dẫn đã nằm trong description của MCP tools. Chỉ cần chạy `opencode`. |
-| **Claude Code** | Thêm MCP server vào cấu hình Claude Code |
-| **Cursor** | Thêm MCP server trong Cursor settings |
-| **Continue.dev** | Thêm MCP server trong `~/.continue/config.json` |
-| **Cline / Roo Code** | Thêm MCP server trong cài đặt extension VS Code |
-| **Mọi MCP client** | `python -m memorymesh` (stdio) hoặc `http://localhost:8090` (SSE) |
+### `memorymesh stats`
+Hiển thị thống kê hệ thống: số phiên, ký ức, đồ thị, kích thước DB.
 
-## Hướng dẫn Khởi động Phiên (Session Start Instructions)
+### `memorymesh init`
+Thiết lập workspace một lệnh — tạo `.env`, thư mục `db/`, cấu hình MCP.
 
-MemoryMesh có thể tự động tải hướng dẫn và tài liệu vào đầu mỗi phiên làm việc — không cần nhắc thủ công. Tương thích với mọi quy ước CLI/IDE.
-
-### Cách hoạt động
-
-Quản lý phiên **hoàn toàn tự động**. Khi công cụ đầu tiên được gọi (ví dụ: `recall`, `remember`), MemoryMesh sẽ tự động khôi phục phiên gần nhất cho workspace hiện tại hoặc tạo phiên mới nếu chưa có. MemoryMesh quét nhiều nguồn theo thứ tự ưu tiên và **chèn nội dung vào đầu system prompt**, giúp model thấy hướng dẫn ngay từ lượt tương tác đầu tiên:
-
-```
-Tầng 1: File toàn cục của người dùng     ~/.config/memorymesh/session.md
-Tầng 2: Thư mục hướng dẫn                .memorymesh/instructions/ (mọi file .md/.txt, sắp xếp theo thứ tự)
-Tầng 3: File CLI/IDE cụ thể              opencode.md, CLAUDE.md, .cursorrules, ... (file đầu tiên được dùng)
-```
-
-### Nội dung file gợi ý
-
-Tạo một trong các file trên với nội dung như:
-
-```markdown
-# Quy tắc Phiên
-
-- **Agent**: Dùng `commit_milestone(summary, tasks_done, next_steps)` khi hoàn thành một khối công việc logic (KHÔNG phải sau mỗi response).
-- MemoryMesh theo dõi số action chưa commit; 5+ action chưa commit sẽ chặn `recall` cho đến khi bạn gọi commit.
-- Bắt đầu: gọi `recall(query="<chủ đề>")` để tải ký ức liên quan (phiên được tự động quản lý)
-```
-
-### Đa người dùng & Đa thiết bị
-
-| Tình huống | Thiết lập |
-|------------|-----------|
-| **Một người dùng, một CLI** | Tạo `opencode.md` (hoặc `CLAUDE.md` / `.cursorrules`) trong thư mục dự án |
-| **Nhiều CLI trên cùng máy** | Tạo thư mục `.memorymesh/instructions/` — hoạt động với mọi CLI |
-| **Mọi dự án, cùng người dùng** | Đặt `SESSION_GLOBAL_INSTRUCTION=~/.config/memorymesh/session.md` |
-| **Mỗi dự án, quy tắc riêng** | Dùng `.memorymesh/instructions/` cho từng dự án |
-| **Không có file hướng dẫn** | MemoryMesh dùng chỉ thị tích hợp sẵn — không cần cấu hình gì thêm |
-
-### Đồng bộ Tài liệu (Docs Sync)
-
-Khi `SESSION_DOCS_SYNC_ENABLED=true` (mặc định), MemoryMesh cũng tự động đọc các file tài liệu của dự án (README.md, CONTRIBUTING.md, Makefile, ...) khi bắt đầu phiên và lưu chúng thành ký ức tham chiếu với thẻ `docs` và `project_docs`. Model có thể tìm thấy chúng qua `recall(query="docs")`.
-
-### Docker
+## Kiểm thử
 
 ```bash
-docker compose -f docker/docker-compose.yml up -d
-```
-
-## 16 Công cụ MCP
-
-| Công cụ | Phân loại Kiến trúc | Mục đích |
-|---------|---------------------|----------|
-| ![Core](https://img.shields.io/badge/-CORE-00f2fe?style=flat-square) `remember` | Ngữ nghĩa / Vector | Lưu ký ức với nội dung, thẻ (tags), độ quan trọng |
-| ![Core](https://img.shields.io/badge/-CORE-00f2fe?style=flat-square) `recall` | Hợp nhất RRF | Truy xuất ký ức liên quan nhất theo truy vấn ngữ nghĩa |
-| ![Core](https://img.shields.io/badge/-CORE-00f2fe?style=flat-square) `commit_milestone` | Checkpoint | **MỚI**: Commit một dấu mốc (summary, tasks_done, next_steps). Giải phóng dữ liệu con tin (hostage). Gọi khi hoàn thành khối công việc logic. |
-| ![Data](https://img.shields.io/badge/-DATA-9d4edd?style=flat-square) `forget` | SQLite Bền vững | Xóa mềm (lưu trữ) một ký ức |
-| ![Data](https://img.shields.io/badge/-DATA-9d4edd?style=flat-square) `archive_memory` | SQLite Bền vững | Di chuyển ký ức vào kho lưu trữ |
-| ![Data](https://img.shields.io/badge/-DATA-9d4edd?style=flat-square) `unarchive_memory` | SQLite Bền vững | Khôi phục ký ức đã lưu trữ |
-| ![Data](https://img.shields.io/badge/-DATA-9d4edd?style=flat-square) `list_memories` | SQLite Bền vững | Liệt kê ký ức chưa lưu trữ (phân trang) |
-| ![Data](https://img.shields.io/badge/-DATA-9d4edd?style=flat-square) `save_workspace_context` | SQLite Bền vững | Chụp nhanh trạng thái workspace |
-| ![Session](https://img.shields.io/badge/-SESSION-00ff66?style=flat-square) `new_session` | Vòng đời Phiên | Tự động gọi khi cần; gọi thủ công để tạo phiên mới |
-| ![Session](https://img.shields.io/badge/-SESSION-00ff66?style=flat-square) `delete_session` | Vòng đời Phiên | Xóa vĩnh viễn phiên + toàn bộ dữ liệu (vector memories, context logs, snapshots) |
-| ![Session](https://img.shields.io/badge/-SESSION-00ff66?style=flat-square) `resume_session` | Vòng đời Phiên | Khôi phục ngữ cảnh từ phiên trước |
-| ![Session](https://img.shields.io/badge/-SESSION-00ff66?style=flat-square) `save_system_prompt` | Vòng đời Phiên | Lưu system prompt vào phiên hiện tại |
-| ![Session](https://img.shields.io/badge/-SESSION-00ff66?style=flat-square) `list_sessions` | Vòng đời Phiên | Liệt kê các phiên trước đây |
-| ![Session](https://img.shields.io/badge/-SESSION-00ff66?style=flat-square) `get_session_context` | Vòng đời Phiên | Xem nhật ký ngữ cảnh phiên |
-| ![Session](https://img.shields.io/badge/-SESSION-00ff66?style=flat-square) `end_session` | Vòng đời Phiên | Kết thúc phiên (nén + xả bộ đệm) |
-| ![Diag](https://img.shields.io/badge/-DIAG-6c757d?style=flat-square) `ping` | Tiện ích Hệ thống | Kiểm tra sức khỏe: số lượng ký ức + kết nối FTS |
-
-## Phát triển
-
-```bash
-make install      # pip install -e ".[test]"
-make test         # chạy tất cả tests
-make run          # khởi động server
-make clean        # xóa file tạm
+make test          # chạy tất cả
+make test-unit     # unit test
+make test-int      # integration test
 ```
 
 ## Cấu trúc Dự án
 
 ```
 src/memorymesh/
-  config.py         Cấu hình ứng dụng (dataclasses + env)
-  router.py         Máy khách LLM router (retry + circuit breaker)
-  embedder.py       SentenceTransformer (async thread pool)
-  memory/
-    manager.py      CRUD cốt lõi + tính điểm + tác vụ nền
-    sqlite_vec_backend.py  DB đơn: vector + FTS5 + metadata
-    consolidation.py       Gom cụm + hợp nhất + hết hạn TTL
-    fact_extractor.py      Trích xuất sự kiện nguyên tử
-    instinct.py            Công cụ học mẫu
-    session_store.py       Vòng đời phiên
-  mcp_server/
-    server.py        Vòng đời máy chủ MCP
-    handlers.py      Triển khai xử lý công cụ
-    tools.py         Định nghĩa lược đồ công cụ
+  cli.py                  CLI tools (sessions, stats, init)
+  config.py               App configuration
+  router.py               LLM router
+  embedder.py             Embedding interface
+  embeddings/             Factory & Providers
+  memory/                 Core CRUD + background tasks
+    sqlite_vec_backend.py Single-DB
+    graph_store.py        Knowledge Graph + CTE
+    context_manager.py    Keyset pagination
+    instinct_manager.py   Instinct RAM cache + regex
+    session_store.py      Session lifecycle + raw log
+    async_batch_logger.py zlib-compressed logs
+  mcp_server/             Server + handlers
+tools/
+    tools.py              Tool schema definitions
 tests/
-   130+ tests (pytest, asyncio_mode=auto)
+    281+ tests (pytest, asyncio_mode=auto)
 ```
 
-## Thông báo Bảo mật
+## Bảo mật
 
 > [!CAUTION]
-> **QUAN TRỌNG:** MemoryMesh là hệ thống ưu tiên máy cục bộ. Tất cả nhật ký hội thoại, ngữ cảnh dự án và ký ức được trích xuất đều được lưu trữ dưới dạng **văn bản thuần (plaintext)** trong cơ sở dữ liệu SQLite (`./db/`).
->
-> Các file cơ sở dữ liệu này có thể chứa thông tin nhạy cảm bao gồm khóa API, đoạn mã độc quyền hoặc dữ liệu cá nhân được thảo luận trong các phiên làm việc. **Không bao giờ commit các file cơ sở dữ liệu này vào kho lưu trữ công khai.**
->
-> Đảm bảo các mẫu sau được liệt kê trong file `.gitignore` của bạn (chúng đã được bao gồm theo mặc định):
+> **QUAN TRỌNG:** MemoryMesh lưu dữ liệu dạng **văn bản thuần** trong SQLite (`./db/`). Không commit lên repo công khai.
 > ```
 > db/
 > .env
@@ -275,15 +187,9 @@ tests/
 ## Bảo trì
 
 ### Xây dựng lại Chỉ mục Vector
-
-Sau các thao tác cơ sở dữ liệu thủ công (ví dụ: xóa hàng loạt bằng DELETE), các chỉ mục Vector và FTS có thể bị không đồng bộ. Hãy chạy script sau để xây dựng lại toàn bộ chỉ mục:
-
 ```bash
 python scripts/rebuild_vec.py
 ```
 
-Script này sẽ đọc tất cả ký ức hợp lệ từ bảng `memories`, tính toán lại embedding cho từng ký ức, và tái tạo các bảng `vec_memories` và `memory_fts` từ đầu.
-
 ## Giấy phép
-
 MIT

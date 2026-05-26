@@ -26,8 +26,8 @@ from ..memory.instinct_manager import InstinctManager, background_learning_daemo
 from ..utils.tool_middleware import ToolExecutionMiddleware
 from ..logging_ import setup_logging
 from ..prompts import COMBINED_AGENT_INSTRUCTION
-from ..embedder import init_embedder, close_embedder, prewarm_embedder
-from .tools import TOOLS
+from ..embedder import init_embedder, close_embedder
+from .tools import TOOLS, EXPENSIVE_TOOLS
 from .handlers import ToolHandlers
 from .handlers.semantic_filter import SemanticFilter
 from ..schemas import validate_tool_input
@@ -47,10 +47,10 @@ def _ensure_single_instance(db_dir: str):
                 old_pid = int(f.read().strip())
             try:
                 os.kill(old_pid, signal.SIGTERM)
-                for _ in range(50):
+                for _ in range(10):
                     try:
                         os.kill(old_pid, 0)
-                        time.sleep(0.1)
+                        time.sleep(0.05)
                     except (OSError, ProcessLookupError):
                         break
             except (OSError, ProcessLookupError):
@@ -163,8 +163,7 @@ class MemoryMeshServer:
                 )]
 
             # Rate limiting for expensive tools (per-session)
-            expensive_tools = frozenset({"recall", "save_workspace_context", "remember"})
-            if name in expensive_tools:
+            if name in EXPENSIVE_TOOLS:
                 session_key = arguments.get("user_id", "default")
                 limiter = get_global_limiter()
                 if not await limiter.allow(session_key):
@@ -205,12 +204,12 @@ class MemoryMeshServer:
 
             # PHASE 3: Log every tool call to raw_log
             if name != "ping":
-                asyncio.create_task(self._safely_log_raw(name, arguments, result))
+                self._create_tracked_task(self._safely_log_raw(name, arguments, result))
 
             # LAYER 2: Auto-save every tool call (except read-only to avoid overwrite loop)
             read_only_tools = ("ping", "list_sessions", "list_memories", "get_session_context", "recall")
             if name not in read_only_tools:
-                asyncio.create_task(
+                self._create_tracked_task(
                     self._safely_auto_save_tool(name, arguments, result)
                 )
 
@@ -388,6 +387,8 @@ class MemoryMeshServer:
             await self.batch_logger.stop()
         except Exception as e:
             logger.warning("Batch logger stop error: %s", e)
+
+        await self.handlers.cancel_background_tasks()
 
         # PHASE 4: Trigger background learning daemon on shutdown
         try:

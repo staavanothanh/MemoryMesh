@@ -49,6 +49,8 @@ COGNITIVE_TOOLS = frozenset({
     "create_entity", "create_relation", "query_graph", "trace_entity",
 })
 
+EXPENSIVE_TOOLS = frozenset({"recall", "save_workspace_context", "remember"})
+
 TOOLS = [
     Tool(
         name="remember",

@@ -2,6 +2,8 @@ import json
 import asyncio
 import time
 import os
+import re
+import subprocess
 import logging
 from typing import Optional, Any
 from cachetools import TTLCache
@@ -51,6 +53,7 @@ class ToolHandlers:
         self._tracker_lock = asyncio.Lock()
         self._write_queue: asyncio.Queue = asyncio.Queue(maxsize=100)
         self._write_worker_task: Optional[asyncio.Task] = None
+        self._background_tasks: set[asyncio.Task] = set()
 
     # ── Session management ──────────────────────────────────────────────
 
@@ -76,8 +79,8 @@ class ToolHandlers:
         try:
             tracker = await self._get_tracker(session_id)
             tracker.record_tool_call(name, args)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("_record_tool_call failed for session %s: %s", session_id, e)
 
     async def _on_milestone_commit(self, session_id: str):
         if not session_id:
@@ -85,8 +88,8 @@ class ToolHandlers:
         try:
             tracker = await self._get_tracker(session_id)
             tracker.on_milestone_commit()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("_on_milestone_commit failed for session %s: %s", session_id, e)
 
     # ── Write worker ────────────────────────────────────────────────────
 
@@ -113,6 +116,21 @@ class ToolHandlers:
                 break
             except Exception as e:
                 logger.error("Write worker error: %s", e)
+
+    @staticmethod
+    async def _safe_task_wrapper(coro):
+        try:
+            await coro
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            logger.error("Background task failed: %s", e, exc_info=True)
+
+    def _create_tracked_task(self, coro) -> asyncio.Task:
+        task = asyncio.create_task(self._safe_task_wrapper(coro))
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
+        return task
 
     async def _idle_flush_loop(self):
         while True:
@@ -239,7 +257,7 @@ class ToolHandlers:
                             else:
                                 self._global_bootstrap_ram_cache[cache_key] = delta
 
-                        asyncio.create_task(self._warm_resume_cache(sid, uid, wp))
+                        self._create_tracked_task(self._warm_resume_cache(sid, uid, wp))
                         _log_bg("AutoSession", f"Resumed ended session {sid[:8]} for {wp}", emoji="")
                         return True
             except Exception:
@@ -350,7 +368,7 @@ class ToolHandlers:
         now = time.monotonic()
         if now - self._last_depth_check_time >= 10.0:
             self._last_depth_check_time = now
-            asyncio.create_task(self._layer3_depth_check())
+            self._create_tracked_task(self._layer3_depth_check())
 
     async def _trigger_teardown_snapshot(self):
         """Flush tracker's unsaved context to DB at session end or disconnect."""
@@ -382,7 +400,7 @@ class ToolHandlers:
             current_depth = await self.session_store.get_context_log_count(self._current_session_id)
             threshold = self.manager.config.session.compact_threshold
             if current_depth >= int(threshold * 0.8):
-                asyncio.create_task(self._create_bootstrap_snapshot(self._current_session_id, self.manager.config.default_user_id))
+                self._create_tracked_task(self._create_bootstrap_snapshot(self._current_session_id, self.manager.config.default_user_id))
                 logger.info("Layer 3 depth check: %d entries >= 80%% of %d, creating snapshot", current_depth, threshold)
         except Exception as e:
             logger.warning("Layer 3 depth check failed: %s", e)
@@ -390,7 +408,6 @@ class ToolHandlers:
     async def _auto_scan_codebase(self, workspace_path: str = "", user_id: str = ""):
         try:
             path = workspace_path or self.manager.config.default_user_id
-            import os
             if not path or path == self.manager.config.default_user_id:
                 path = os.getcwd()
             scanner = CodebaseScanner(workspace_path=path)
@@ -528,6 +545,13 @@ class ToolHandlers:
         except Exception as e:
             logger.warning("Batch fact extraction failed: %s", e)
 
+    async def cancel_background_tasks(self):
+        for task in list(self._background_tasks):
+            task.cancel()
+        if self._background_tasks:
+            await asyncio.gather(*self._background_tasks, return_exceptions=True)
+            self._background_tasks.clear()
+
     async def _finalize_session(self, session_id: str, user_id: str):
         """Core lifecycle: mark ended + bootstrap.
 
@@ -542,7 +566,7 @@ class ToolHandlers:
             cache_key = f"{user_id}:{wp}" if wp else user_id
             if snapshot_text:
                 self._global_bootstrap_ram_cache[cache_key] = snapshot_text
-            asyncio.create_task(self._prewarm_and_flush(cache_key, user_id, wp))
+            self._create_tracked_task(self._prewarm_and_flush(cache_key, user_id, wp))
             _log_bg("Finalize", f"Session {session_id[:12]} finalized", emoji="")
         except Exception as e:
             logger.error("Session finalization failed for %s: %s", session_id, e)
@@ -560,8 +584,8 @@ class ToolHandlers:
                 existing = self._global_bootstrap_ram_cache.get(cache_key, "")
                 self._global_bootstrap_ram_cache[cache_key] = f"{existing}\n\nPre-computed:\n{mem_summary}" if existing else mem_summary
                 self._recall_results_cache[cache_key] = results
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("_prewarm_and_flush pre-warm search failed: %s", e)
         await self._flush_fact_buffer()
 
     async def _warm_resume_cache(self, session_id: str, uid: str, wp: str | None):
@@ -743,8 +767,8 @@ class ToolHandlers:
                         if text:
                             bootstrap_text = self._format_bootstrap(text, "previous session")
                             break
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug("Bootstrap tag lookup failed: %s", e)
 
             # CHOKE-POINT: Block recall if too many uncommitted actions
             session_id = self._current_session_id
@@ -801,9 +825,8 @@ class ToolHandlers:
     async def _handle_recall_paginated(self, uid: str, wp: str, args: dict, raw_cursor: str) -> dict:
         """Phase 6.2: Cursor-based pagination for deep recall pages."""
         try:
-            import json as _json
-            cursor_dict = _json.loads(raw_cursor) if isinstance(raw_cursor, str) else raw_cursor
-        except (_json.JSONDecodeError, TypeError):
+            cursor_dict = json.loads(raw_cursor) if isinstance(raw_cursor, str) else raw_cursor
+        except (json.JSONDecodeError, TypeError):
             cursor_dict = None
 
         cm = getattr(self.manager, "context_manager", None)
@@ -835,7 +858,7 @@ class ToolHandlers:
 
         meta = {"count": len(results), "page": next_cursor.get("page", 1) if next_cursor else 1, "has_more": has_more}
         if next_cursor:
-            meta["next_cursor"] = _json.dumps(next_cursor) if isinstance(raw_cursor, str) else next_cursor
+            meta["next_cursor"] = json.dumps(next_cursor) if isinstance(raw_cursor, str) else next_cursor
 
         return {
             "status": "success",
@@ -1004,10 +1027,9 @@ class ToolHandlers:
             props = None
             raw = args.get("properties")
             if raw:
-                import json as _json
                 try:
-                    props = _json.loads(raw)
-                except (_json.JSONDecodeError, TypeError):
+                    props = json.loads(raw)
+                except (json.JSONDecodeError, TypeError):
                     props = {"raw": raw}
             entity_id = await self.manager.graph.create_entity(
                 name=args["name"],
@@ -1151,12 +1173,12 @@ class ToolHandlers:
                 try:
                     tracker = await self._get_tracker(session_id)
                     released_data = tracker.resolve_milestone()
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug("Tracker resolve_milestone failed: %s", e)
 
             # Extract atomic facts in background
             if self.manager.config.session.auto_extract_facts:
-                asyncio.create_task(self._extract_and_save_facts(combined, user_id))
+                self._create_tracked_task(self._extract_and_save_facts(combined, user_id))
 
             response_text = f"✅ Milestone committed. (ID: {milestone_id[:12]})"
             if released_data:
@@ -1373,7 +1395,8 @@ class ToolHandlers:
                 return await loop.run_in_executor(
                     None, lambda: _read_sync(path)
                 )
-            except Exception:
+            except Exception as e:
+                logger.debug("_read failed for path %s: %s", path, e)
                 return ""
 
         def _read_sync(path: str) -> str:
@@ -1442,7 +1465,8 @@ class ToolHandlers:
                 if not content:
                     return None
                 return (os.path.basename(path), content)
-            except Exception:
+            except Exception as e:
+                logger.debug("_read_doc failed: %s", e)
                 return None
 
         def _read_doc_sync(path: str) -> str:
@@ -1484,7 +1508,6 @@ class ToolHandlers:
 
         # Git context (non-blocking, inline cache update)
         try:
-            import subprocess, os
             wp = workspace_path or os.getcwd()
             if os.path.isdir(os.path.join(wp, ".git")):
                 loop = asyncio.get_event_loop()
@@ -1507,12 +1530,12 @@ class ToolHandlers:
                     cache_key = f"{user_id}:{workspace_path}" if workspace_path else user_id
                     existing = self._global_bootstrap_ram_cache.get(cache_key, "")
                     self._global_bootstrap_ram_cache[cache_key] = f"{existing}\n\n{ctx}" if existing else ctx
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Background git context failed: %s", e)
 
         # Codebase scan & docs sync
-        asyncio.create_task(self._auto_scan_codebase(workspace_path, user_id))
-        asyncio.create_task(self._sync_docs_files(workspace_path, user_id))
+        self._create_tracked_task(self._auto_scan_codebase(workspace_path, user_id))
+        self._create_tracked_task(self._sync_docs_files(workspace_path, user_id))
 
     async def handle_new_session(self, args: dict) -> dict:
         try:
@@ -1533,7 +1556,7 @@ class ToolHandlers:
             if self._current_session_id:
                 prev_sid = self._current_session_id
                 self._current_session_id = ""
-                asyncio.create_task(self._finalize_session(prev_sid, user_id))
+                self._create_tracked_task(self._finalize_session(prev_sid, user_id))
             session_id = await self.session_store.create_session(
                 user_id=user_id,
                 system_prompt=system_prompt,
@@ -1569,7 +1592,7 @@ class ToolHandlers:
                 memory_id = None
 
             # Background operations (non-blocking)
-            asyncio.create_task(self._bg_new_session_tasks(user_id, workspace_path))
+            self._create_tracked_task(self._bg_new_session_tasks(user_id, workspace_path))
 
             data = {
                 "session_id": session_id,
@@ -1665,8 +1688,6 @@ class ToolHandlers:
 
     async def handle_save_workspace_context(self, args: dict) -> dict:
         try:
-            import os
-            import subprocess
             user_id = args.get("user_id", self.manager.config.default_user_id)
             workspace_path = args.get("workspace_path", "")
             if not workspace_path:
@@ -1708,7 +1729,6 @@ class ToolHandlers:
                     try:
                         with open(pyproject, "r", encoding="utf-8") as f:
                             content = f.read()
-                        import re
                         deps = re.findall(r'^([\w\-]+)\s*=\s*["\']', content, re.MULTILINE)
                         snapshot["dependencies"]["project"] = deps[:30]
                     except Exception:
@@ -1757,7 +1777,7 @@ class ToolHandlers:
             else:
                 recalled = []
                 # Fire background search — does not block response
-                asyncio.create_task(self._warm_resume_cache(session_id, user_id, wp))
+                self._create_tracked_task(self._warm_resume_cache(session_id, user_id, wp))
 
             await self._log_context("assistant", f"Resumed session {session_id}: {len(context)} messages, {len(recalled)} memories", "resume_session", str(args))
             await self._save_context_memory("assistant", f"Resumed session {session_id}: {len(context)} messages, {len(recalled)} memories", "resume_session")

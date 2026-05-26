@@ -90,7 +90,7 @@ class RouterClient:
             raise LLMUnavailableError("Circuit breaker open: too many failures")
         raise last_error or RouterError(primary, self.config.max_retries, "Unknown error")
 
-    async def _call(self, model: str, prompt: str, temperature: float = None, response_format: dict = None) -> str:
+    async def _call(self, model: str, prompt: str, temperature: Optional[float] = None, response_format: Optional[dict] = None) -> str:
         body = {
             "model": model,
             "messages": [{"role": "user", "content": prompt}],

@@ -15,6 +15,7 @@ from __future__ import annotations
 from typing import Optional, List, Union, Literal, TypedDict
 
 from pydantic import BaseModel, Field, field_validator
+import json
 
 
 # ── Domain Models (TypedDict for dict-access compatibility) ──────────────
@@ -80,6 +81,16 @@ class RecallInput(BaseModel):
     user_id: Optional[str] = Field(default=None, description="User ID (default from config)")
     max_tokens: Optional[int] = Field(default=None, description="Token budget for results")
     cursor: Optional[str] = Field(default=None, description="JSON cursor for pagination: {'last_score': 0.85, 'last_id': '...', 'page': 2}. Omit for first page.")
+
+    @field_validator("cursor")
+    @classmethod
+    def cursor_must_be_valid_json(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None:
+            try:
+                json.loads(v)
+            except (json.JSONDecodeError, TypeError):
+                raise ValueError("cursor must be a valid JSON string")
+        return v
 
 
 class ForgetInput(BaseModel):
@@ -176,6 +187,10 @@ class ResumeSessionInput(BaseModel):
 
 # ── Knowledge Graph Tool Input Models ───────────────────────────────────
 
+_KNOWN_ENTITY_TYPES = frozenset({
+    "concept", "project", "module", "bug", "person", "tool", "file", "function", "class",
+})
+
 class CreateEntityInput(BaseModel):
     """Input for the create_entity tool — a cognitive operation that records a concept/entity into the Knowledge Graph.
     Safe for Read-Only/Plan Mode: this operation does NOT modify the file system or execute external commands.
@@ -186,6 +201,28 @@ class CreateEntityInput(BaseModel):
     properties: Optional[str] = Field(default=None, description="Optional JSON string of entity properties/metadata")
     workspace_path: str = Field(default="", description="Workspace path to limit scope")
     user_id: Optional[str] = Field(default=None, description="User ID (default from config)")
+
+    @field_validator("entity_type")
+    @classmethod
+    def entity_type_must_be_known(cls, v: str) -> str:
+        if v not in _KNOWN_ENTITY_TYPES:
+            raise ValueError(f"Unknown entity_type: {v}. Must be one of {sorted(_KNOWN_ENTITY_TYPES)}")
+        return v
+
+    @field_validator("properties")
+    @classmethod
+    def properties_must_be_valid_json(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None:
+            try:
+                json.loads(v)
+            except (json.JSONDecodeError, TypeError):
+                raise ValueError("properties must be a valid JSON string")
+        return v
+
+_KNOWN_RELATION_TYPES = frozenset({
+    "SOLVES", "DEPENDS_ON", "IMPLEMENTS", "USES", "HAS_PREFERENCE",
+    "RELATES_TO", "EXTENDS", "CONTAINS", "CALLS", "CREATES",
+})
 
 class CreateRelationInput(BaseModel):
     """Input for the create_relation tool — a cognitive operation that links two entities in the Knowledge Graph.
@@ -198,6 +235,13 @@ class CreateRelationInput(BaseModel):
     weight: float = Field(default=1.0, ge=0.0, le=1.0, description="Relation weight/relevance (0.0-1.0)")
     workspace_path: str = Field(default="", description="Workspace path to limit scope")
     user_id: Optional[str] = Field(default=None, description="User ID (default from config)")
+
+    @field_validator("relation_type")
+    @classmethod
+    def relation_type_must_be_known(cls, v: str) -> str:
+        if v not in _KNOWN_RELATION_TYPES:
+            raise ValueError(f"Unknown relation_type: {v}. Must be one of {sorted(_KNOWN_RELATION_TYPES)}")
+        return v
 
 class QueryGraphInput(BaseModel):
     """Input for the query_graph tool — find 1-hop neighbors of an entity in the Knowledge Graph."""
@@ -220,7 +264,7 @@ class RecallRawInput(BaseModel):
     limit: int = Field(default=50, ge=1, le=500, description="Maximum number of entries")
     offset: int = Field(default=0, ge=0, description="Starting position")
     tool_name: str = Field(default="", description="Filter by tool name")
-    status: Literal["", "success", "error"] = Field(default="", description="Filter by status")
+    status: Optional[Literal["success", "error"]] = Field(default=None, description="Filter by status (omit for no filter)")
 
 class LearnSessionInput(BaseModel):
     """Input for the learn_session tool — analyze a session and extract behavioral patterns."""
