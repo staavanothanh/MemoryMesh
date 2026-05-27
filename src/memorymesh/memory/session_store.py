@@ -136,6 +136,10 @@ class SessionStore:
         await self._db.commit()
 
     async def create_session(self, user_id: str, system_prompt: str = "", workspace_path: str = "", auto_close_stale: bool = True, stale_minutes: int = 0) -> str:
+        if not user_id:
+            from ..config import AppConfig
+            user_id = AppConfig.from_env().default_user_id
+            logger.warning("create_session called with empty user_id, falling back to default: %s", user_id)
         if auto_close_stale:
             await self._close_stale_sessions(user_id, stale_minutes)
         session_id = str(uuid.uuid4())

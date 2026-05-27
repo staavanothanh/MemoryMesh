@@ -234,6 +234,9 @@ class ToolHandlers:
                 return False
 
         uid = args.get("user_id", self.manager.config.default_user_id)
+        if not uid:
+            uid = self.manager.config.default_user_id
+            logger.warning("ensure_session received empty user_id, using default: %s", uid)
         wp = args.get("workspace_path", "")
 
         if wp:
@@ -1150,6 +1153,9 @@ class ToolHandlers:
     async def handle_commit_milestone(self, args: dict) -> dict:
         try:
             user_id = args.get("user_id", self.manager.config.default_user_id)
+            if not user_id:
+                user_id = self.manager.config.default_user_id
+                logger.warning("handle_commit_milestone received empty user_id, using default: %s", user_id)
             summary = args.get("summary", "")
             tasks_done = args.get("tasks_done", "")
             next_steps = args.get("next_steps", "")
@@ -1550,6 +1556,9 @@ class ToolHandlers:
     async def handle_new_session(self, args: dict) -> dict:
         try:
             user_id = args.get("user_id", self.manager.config.default_user_id)
+            if not user_id:
+                user_id = self.manager.config.default_user_id
+                logger.warning("handle_new_session received empty user_id, using default: %s", user_id)
             system_prompt = args.get("system_prompt", "")
 
             # Load session instructions from files (prepend to system prompt)
