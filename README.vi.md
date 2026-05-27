@@ -161,7 +161,12 @@ pip install memorymesh
 pip install "memorymesh[local]"
 
 # C. Đầy đủ CLI
-pip install "memorymesh[cli]"           # hoặc: pip install "memorymesh[local,cli]"
+pip install "memorymesh[cli]"
+
+# D. Phát triển (chạy tests)
+pip install "memorymesh[test,local,cli]"
+
+# Gộp extras tuỳ ý: pip install "memorymesh[local,cli]"
 
 # Khởi tạo workspace
 python -m memorymesh init               # sinh .env, db/, cấu hình MCP

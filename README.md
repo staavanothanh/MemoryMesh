@@ -165,8 +165,13 @@ pip install "memorymesh[local]"
 **C. With Rich CLI Tools**
 ```bash
 pip install "memorymesh[cli]"
-# Or install everything: pip install "memorymesh[local,cli]"
 ```
+**D. For Development (run tests)**
+```bash
+pip install "memorymesh[test,local,cli]"
+```
+
+> 💡 Combine extras as needed: `pip install "memorymesh[local,cli]"` installs everything.
 
 ### 2. Initialize the Workspace
 ```bash
