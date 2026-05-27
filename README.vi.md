@@ -4,53 +4,86 @@
 
 <div align="center">
   <h1>🧠 MemoryMesh</h1>
-  <p><strong>Máy chủ MCP bộ nhớ bền vững (persistent memory), ưu tiên máy cục bộ (local-first) cho các AI agent.</strong></p>
-
+  <p><strong>The only MCP Memory Server with Behavioral Learning + Action Control</strong><br>
+  <em>(Máy chủ MCP bộ nhớ duy nhất có Behavioral Learning + Action Control)</em></p>
   <p>
-    <a href="https://github.com/features/actions"><img src="https://img.shields.io/badge/MCP-Compliant-brightgreen?style=for-the-badge&logo=quickpass" alt="MCP Compliant"></a>
+    <img src="https://img.shields.io/badge/MCP-Compliant-brightgreen?style=for-the-badge&logo=quickpass" alt="MCP Compliant">
     <img src="https://img.shields.io/badge/Python-3.12+-blue?style=for-the-badge&logo=python" alt="Python Version">
     <img src="https://img.shields.io/badge/Database-SQLite--vec-orange?style=for-the-badge&logo=sqlite" alt="Database">
     <img src="https://img.shields.io/badge/License-MIT-yellow?style=for-the-badge" alt="License">
     <img src="https://img.shields.io/badge/Version-0.5.0-purple?style=for-the-badge" alt="Version 0.5.0">
+    <img src="https://img.shields.io/badge/Tests-326%20passed-brightgreen?style=for-the-badge" alt="Tests">
   </p>
 </div>
 
-MemoryMesh là máy chủ MCP hiệu suất cao, lưu trữ dữ liệu tại máy cục bộ (local-first) nhằm cung cấp cho các AI agent ngữ cảnh dài hạn, khả năng suy luận đa chặng, và học tập hành vi mà không cần phụ thuộc vào bất kỳ cơ sở dữ liệu đám mây (cloud databases) nào.
+MemoryMesh là máy chủ MCP hiệu suất cao, lưu trữ dữ liệu tại máy cục bộ (local-first) — được xây dựng để cung cấp cho AI agent ngữ cảnh dài hạn, suy luận đa chặng, và học tập hành vi. Tất cả trong một file SQLite duy nhất, không Docker, không cloud.
+```
+┌────────────────────────────────────────────────────────────────┐
+│ pip install memorymesh → python -m memorymesh init → sẵn sàng  │
+└────────────────────────────────────────────────────────────────┘
+```
+
+**Dành cho ai?** Lập trình viên AI agent (OpenCode, Cursor, Claude Code) • Người yêu thích MCP muốn zero hạ tầng • Người quan tâm quyền riêng tư • Tool builder cần 24 tools (không chỉ 9)
+
+## 🧠 So sánh MemoryMesh với các MCP Memory khác
+
+| Tính năng | Anthropic Official | mem0 | Zep/Graphiti | **MemoryMesh** |
+|-----------|:-:|:-:|:-:|:-:|
+| GitHub Stars | ~86K | ~52K | ~24K | **mới** |
+| Behavioral Learning | ❌ | ❌ | ❌ | ✅ **Instinct v2** |
+| Action Choke Point | ❌ | ❌ | ❌ | ✅ |
+| 3-tier Hybrid Search | ❌ | ❌ | ❌ | ✅ |
+| Lossless Raw History | ❌ | ❌ | ❌ | ✅ |
+| Multi-hop Knowledge Graph | ✅ | Tùy chọn (Pro $249) | ✅ | ✅ |
+| Temporal Decay | ❌ | ❌ | ✅ | ✅ |
+| MCP Tools | 9 | 9 | 9 | **24** |
+| Hạ tầng | JSONL file | Qdrant (tự host) | Neo4j (tự host) | **✅ Single SQLite** |
+| Cài đặt | npx/docker | pip + services | docker + Neo4j | **`pip install memorymesh`** |
+
+> *MemoryMesh là dự án mới. Các dự án khác có hệ sinh thái và cộng đồng lớn hơn. Chúng tôi tập trung vào những tính năng mà các dự án khác không có.*
 
 ---
 
 ## 📑 Mục lục
 
-- [✨ Có gì mới trong v0.5.0](#-có-gì-mới-trong-v050)
-- [🏗 Kiến trúc Hệ thống](#-kiến-trúc-hệ-thống)
-- [🚀 Bắt đầu Nhanh & Cài đặt](#-bắt-đầu-nhanh--cài-đặt)
-- [⚙️ Cấu hình](#️-cấu-hình)
-- [🧰 Các Công cụ MCP có sẵn](#-các-công-cụ-mcp-có-sẵn)
-- [💻 Sử dụng CLI](#-sử-dụng-cli)
-- [🛠 Phát triển & Kiểm thử](#-phát-triển--kiểm-thử)
-- [🛡️ Lưu ý Bảo mật](#️-lưu-ý-bảo-mật)
-- [📄 Giấy phép](#-giấy-phép)
+- [🧠 So sánh](#so-sánh-memorymesh-với-các-mcp-memory-khác)
+- [✨ Tại sao MemoryMesh?](#tại-sao-memorymesh)
+- [🏗 Kiến trúc Hệ thống](#kiến-trúc-hệ-thống)
+- [💡 Câu chuyện đằng sau](#câu-chuyện-đằng-sau)
+- [🚀 Bắt đầu Nhanh & Cài đặt](#bắt-đầu-nhanh-cài-đặt)
+- [⚙️ Cấu hình](#cấu-hình)
+- [🧰 Các Công cụ MCP có sẵn](#các-công-cụ-mcp-có-sẵn)
+- [💻 Sử dụng CLI](#sử-dụng-cli)
+- [🛠 Phát triển & Kiểm thử](#phát-triển-kiểm-thử)
+- [🤝 Cách đóng góp](#cách-đóng-góp)
+- [🛡️ Lưu ý Bảo mật](#lưu-ý-bảo-mật)
+- [📄 Giấy phép](#giấy-phép)
 
 ---
 
-## ✨ Có gì mới trong v0.5.0
+## ✨ Tại sao MemoryMesh?
 
-Phiên bản 0.5.0 là một bước tiến vượt bậc, giới thiệu GraphRAG, học tập hành vi, và cơ chế quản lý ngữ cảnh cực kỳ vững chắc.
+Những tính năng này là độc nhất — không MCP memory server nào khác có.
 
-| Tính năng | Mô tả |
-| :--- | :--- |
-| **🧠 Đồ thị Tri thức (GraphRAG)** | Các thực thể/quan hệ trên SQLite thông qua `trace_entity`, `query_graph`, `create_entity`. Hỗ trợ Recursive CTE cho suy luận đa chặng. An toàn cho chế độ Plan/Read-Only. |
-| **🤖 Bản năng v2 (Học tập Hành vi)** | RAM cache chứa regex được biên dịch sẵn cho tốc độ khớp O(1). Trích xuất mẫu quy trình N-gram. Tự động áp dụng tag khi độ tin cậy > 0.8. |
-| **📜 Lịch sử Nguyên bản (Lossless)** | Ghi lại chính xác nguyên văn lệnh gọi công cụ với nén zlib qua `AsyncBatchLogger`. Truy vấn lại với `recall_raw` — không còn lo mất ngữ cảnh do nén tóm tắt. |
-| **⚡ Tự động hóa Vòng đời** | Áp dụng Context Delta đã được nén (<800 tokens) khi tự động gọi lại. Phục hồi mốc bị thiếu (Orphan Recovery) một cách lười biếng. Tự động theo dõi trạng thái nghỉ (15 phút). |
-| **📄 Quản lý Ngữ cảnh Động** | Phân trang Keyset (cursor) phi trạng thái. Thuật toán tính điểm động được đẩy trực tiếp vào SQLite CTEs. Đếm token đa luồng. |
-| **🔧 Giảm tải Embedding** | Lõi siêu nhẹ với `pip install memorymesh` (không cần PyTorch). Cờ tùy chọn `[local]` giúp tính toán nhúng cục bộ qua `SentenceTransformer`. |
+**🧠 Instinct v2 (Học tập Hành vi)** — Trích xuất mẫu workflow N-gram, RAM cache regex O(1), tự động gắn tag khi độ tin cậy > 0.8, reinforcement scoring. Agent học cách bạn làm việc.
+
+**⛓️ Action Choke Point** — Sau 5 hành động chưa commit, `recall` bị khóa cho đến khi gọi `commit_milestone`. Chống tràn context. Giải phóng dữ liệu tức thì (zero round-trip).
+
+**🔍 Tìm kiếm 3 Tầng (Hybrid)** — Vector ANN (sqlite-vec) → FTS5 từ khóa → quét thời gian. Tính điểm theo cấp (session 2x, user 1.5x, knowledge 1x). Nhận biết workspace.
+
+**📜 Lịch sử Nguyên bản (Lossless)** — Ghi log tool call chính xác nguyên văn với nén zlib. Truy vấn với `recall_raw` (lọc theo tên tool, thành công/lỗi). Không mất context do LLM summary.
+
+**🕸️ GraphRAG Đa chặng** — Recursive CTE truyền tải đồ thị tri thức. Entities, relations, phát hiện cycle. An toàn cho Plan/Read-Only. Xuất XML triplet.
+
+**📄 Quản lý Ngữ cảnh Động** — Keyset cursor phân trang (phi trạng thái). Tính điểm động trong SQLite CTEs (importance × level weight × recency decay). Đếm token đa luồng với 2-phase estimation.
+
+**🧩 Nhúng Linh hoạt** — `pip install memorymesh` (~50MB core, không PyTorch). Cờ `[local]` cho SentenceTransformer offline. Hỗ trợ remote API.
 
 ---
 
 ## 🏗 Kiến trúc Hệ thống
 
-MemoryMesh chạy trên nền một tệp cơ sở dữ liệu SQLite duy nhất được tích hợp `sqlite-vec` (tìm kiếm vector), `FTS5` (tìm kiếm từ khóa) và các bảng sơ đồ tùy chỉnh cho Đồ thị Tri thức.
+MemoryMesh chạy trên nền một tệp SQLite duy nhất tích hợp `sqlite-vec` (vector), `FTS5` (từ khóa) và các bảng Đồ thị Tri thức.
 
 ```mermaid
 graph TD
@@ -85,78 +118,92 @@ graph TD
     MM_SERVER <==> Storage
 ```
 
-### 💎 Tinh hoa Ẩn (Under the Hood)
-- **Ngữ cảnh Tức thời (Optimistic Hydration):** Các mỏ neo ngữ nghĩa được tính toán trước khi phiên đóng lại. AI lấy lại toàn bộ bối cảnh trong `<5ms`.
-- **Truy xuất 3 Tầng Dự phòng:** 1️⃣ Ngữ nghĩa (sqlite-vec) → 2️⃣ Từ khóa FTS5 → 3️⃣ Quét theo trình tự thời gian. Ngăn chặn hiện tượng "ảo giác do mất trí nhớ".
-- **Cơ chế Điểm Nghẽn (Choke Point):** Sau 5 hành động chưa commit, lệnh `recall` sẽ bị khóa tạm thời cho đến khi gọi `commit_milestone`. Chống tràn ngữ cảnh hiệu quả.
+### 💎 Tinh hoa Ẩn
+- **Ngữ cảnh Tức thời:** Semantic anchors được tính trước khi đóng phiên. AI lấy lại context trong `<5ms`.
+- **Truy xuất 3 Tầng Dự phòng:** 1️⃣ Ngữ nghĩa → 2️⃣ Từ khóa → 3️⃣ Quét thời gian. Chống "ảo giác do mất trí nhớ".
+- **Choke Point:** Sau 5 hành động chưa commit, `recall` bị khóa đến khi gọi `commit_milestone`.
+
+### Cấu trúc Thư mục
+
+```
+src/memorymesh/
+├── cli.py / config.py / router.py / embedder.py
+├── embeddings/          EmbeddingFactory, providers (local/remote)
+├── memory/
+│   ├── manager.py       CRUD + scoring + background tasks
+│   ├── sqlite_vec_backend.py  Vector + FTS5 + Graph (single DB)
+│   ├── graph_store.py   Knowledge Graph + Recursive CTE
+│   ├── context_manager.py     Keyset pagination + dynamic scoring
+│   ├── instinct*.py     Pattern learning (N-gram, RAM cache regex)
+│   ├── session_store.py       Session lifecycle + raw logs
+│   ├── async_batch_logger.py  zlib batch compression
+│   └── codebase_adapter.py    Read-only ACL adapter
+├── mcp_server/          Server lifecycle, modular handlers (5 files)
+tests/                   326+ tests (pytest, asyncio_mode=auto)
+```
+
+---
+
+## 💡 Câu chuyện đằng sau
+
+Tôi đã thử mọi MCP memory server. Anthropic Official — chỉ 9 tools, không semantic search, không behavioral learning. Mem0 — mạnh nhưng cần Qdrant và graph features sau $249/tháng. Zep temporal graph — cần Neo4j.
+
+Tôi muốn: **Zero hạ tầng** (pip install + SQLite) • **Học tập hành vi** (agent tự học cách tôi làm việc) • **Kiểm soát hành động** (chứng minh tiến độ trước khi recall) • **Không mất context** (lưu nguyên văn, không nén LLM) • **24 tools** (CRUD đầy đủ).
+
+MemoryMesh là kết quả. Xây dựng từ đầu, 0→v0.5.0, 326 tests, MIT license. Miễn phí mãi mãi. — Shinn
 
 ---
 
 ## 🚀 Bắt đầu Nhanh & Cài đặt
 
-### Yêu cầu
-- Python **3.12+**
-- Một LLM endpoint tương thích chuẩn OpenAI (Ollama, vLLM, OpenAI, 9Router, v.v.)
+**Yêu cầu:** Python 3.12+, LLM endpoint tương thích OpenAI.
 
-### 1. Chọn chế độ cài đặt:
-
-**A. Chế độ Nhúng Từ xa (Rất Nhẹ)**
-Lõi chỉ khoảng ~50MB. Yêu cầu một API từ xa để tạo vector (embeddings).
 ```bash
+# A. Nhẹ (remote embedding, ~50MB core)
 pip install memorymesh
-```
 
-**B. Chế độ Nhúng Cục bộ (Hoàn toàn Offline)**
-Bao gồm cả `sentence-transformers` (~1.5GB). Đảm bảo tính riêng tư và không cần internet.
-```bash
+# B. Offline (sentence-transformers, ~1.5GB)
 pip install "memorymesh[local]"
-```
 
-**C. Với Công cụ CLI đầy đủ**
-```bash
-pip install "memorymesh[cli]"
-# Hoặc cài đặt toàn bộ: pip install "memorymesh[local,cli]"
-```
+# C. Đầy đủ CLI
+pip install "memorymesh[cli]"           # hoặc: pip install "memorymesh[local,cli]"
 
-### 2. Khởi tạo Workspace
-```bash
-python -m memorymesh init
+# Khởi tạo workspace
+python -m memorymesh init               # sinh .env, db/, cấu hình MCP
 ```
-Lệnh này tự động sinh tệp `.env`, thư mục cơ sở dữ liệu `db/`, và tự định cấu hình MCP cho bạn.
 
 ---
 
 ## ⚙️ Cấu hình
 
-Hãy chỉnh sửa tệp `.env` vừa sinh ra trong workspace của bạn:
+Chỉnh sửa tệp `.env` trong workspace:
 
 | Biến | Mặc định | Mô tả |
 | :--- | :--- | :--- |
-| `ROUTER_URL` | `http://127.0.0.1:20128/v1` | URL của LLM endpoint. |
-| `DEFAULT_MODEL` | `your-model` | Mô hình LLM chính dùng để tóm tắt. |
-| `BACKGROUND_MODEL_POOL` | *(Trống)* | Danh sách các mô hình giá rẻ (cách nhau bằng dấu phẩy) dùng để trích xuất sự kiện dưới nền. |
-| `EMBEDDING_MODE` | `local` | Đổi thành `remote` nếu dùng API tính toán vector. |
-| `EMBEDDING_MODEL` | `paraphrase-multilingual...` | Tên của mô hình nhúng cục bộ. |
-| `REMOTE_EMBEDDING_API_URL` | *(Trống)* | Endpoint cho API vector từ xa. |
-| `REMOTE_EMBEDDING_API_KEY` | *(Trống)* | API key cho máy chủ vector từ xa. |
-| `VEC_DB_PATH` | `./db/memory.db` | Nơi lưu trữ CSDL SQLite. |
-| `DEFAULT_USER_ID` | `your_user_id` | **Cô lập đa tác tử (Multi-agent)!** Đặt ID khác nhau cho các tác tử khác nhau (ví dụ: `opencode-agent`, `cursor-agent`). |
+| `ROUTER_URL` | `http://127.0.0.1:20128/v1` | LLM endpoint |
+| `DEFAULT_MODEL` | `your-model` | Model chính cho tóm tắt |
+| `BACKGROUND_MODEL_POOL` | *(Trống)* | Model rẻ cho fact extraction nền |
+| `EMBEDDING_MODE` | `local` | `local` hoặc `remote` |
+| `EMBEDDING_MODEL` | `paraphrase-multilingual...` | Tên model nhúng |
+| `REMOTE_EMBEDDING_API_URL` | *(Trống)* | Endpoint API từ xa |
+| `REMOTE_EMBEDDING_API_KEY` | *(Trống)* | API key |
+| `VEC_DB_PATH` | `./db/memory.db` | Đường dẫn CSDL |
+| `DEFAULT_USER_ID` | `your_user_id` | **Cô lập đa tác tử** — đặt ID khác cho mỗi agent |
 
-### 🌐 Đồng bộ Xuyên Thiết bị (Cross-Device Sync)
-Bạn có thể đặt thư mục `db/` trên Google Drive hoặc Dropbox. Sử dụng cùng một `DEFAULT_USER_ID` trên các thiết bị khác nhau sẽ giúp bộ nhớ của AI được đồng bộ ngay lập tức!
+**🌐 Đồng bộ Xuyên Thiết bị:** Đặt `db/` trên Google Drive/Dropbox. Cùng `DEFAULT_USER_ID` = đồng bộ ngay!
 
 ---
 
 ## 🧰 Các Công cụ MCP có sẵn
 
-MemoryMesh xuất ra **22 công cụ MCP mạnh mẽ** cho agent:
+MemoryMesh xuất ra **24 công cụ MCP** cho agent:
 
 | Phân loại | Công cụ |
 | :--- | :--- |
-| **🧠 Hoạt động Bộ nhớ** | `remember`, `recall`, `forget`, `archive_memory`, `unarchive_memory`, `list_memories` |
+| **🧠 Bộ nhớ** | `remember`, `recall`, `forget`, `archive_memory`, `unarchive_memory`, `list_memories` |
 | **🕸️ Đồ thị Tri thức** | `create_entity`, `create_relation`, `query_graph`, `trace_entity` |
 | **⏳ Vòng đời Phiên** | `new_session`, `end_session`, `resume_session`, `delete_session`, `list_sessions`, `get_session_context`, `save_system_prompt`, `preserve_session_memories` |
-| **🏗️ Quản lý Workspace**| `commit_milestone`, `save_workspace_context` |
+| **🏗️ Workspace** | `commit_milestone`, `save_workspace_context` |
 | **🎓 Học tập Hành vi** | `learn_session`, `recall_raw` |
 | **🔌 Tiện ích** | `ping` |
 
@@ -164,46 +211,51 @@ MemoryMesh xuất ra **22 công cụ MCP mạnh mẽ** cho agent:
 
 ## 💻 Sử dụng CLI
 
-MemoryMesh có sẵn các lệnh dòng lệnh (terminal) để kiểm tra CSDL.
-
 ```bash
-# Liệt kê 20 phiên gần nhất (Trạng thái, Workspace, Dấu thời gian)
-memorymesh sessions --limit 20
-
-# Hiển thị thống kê hệ thống đầy đủ (Thực thể, Kích thước DB, Quan hệ)
-memorymesh stats
-
-# Khởi tạo một workspace mới
-memorymesh init
+memorymesh sessions --limit 20    # 20 phiên gần nhất
+memorymesh stats                  # thống kê hệ thống
+memorymesh init                   # khởi tạo workspace
 ```
+
+### 📊 Microbenchmarks
+
+| Thao tác | p50 | Thao tác | p50 |
+| :--- | :--- | :--- | :--- |
+| recall (có cache) | <5ms | create_entity | ~8ms |
+| recall (không cache) | ~15ms | query_graph (1-hop) | ~3ms |
+| remember | ~10ms | trace_entity (3-hop) | ~15ms |
+| learn_session | ~50ms | recall_raw (100 dòng) | ~2ms |
 
 ---
 
 ## 🛠 Phát triển & Kiểm thử
 
-Việc sử dụng tệp `Makefile` giúp quy trình phát triển cực kì nhẹ nhàng:
-
 ```bash
-# Cài đặt toàn bộ môi trường lập trình
-make install-all
-
-# Chạy kiểm thử (hơn 281 bài kiểm thử độ ổn định cho mọi tính năng)
-make test
-make test-unit
-make test-int
-
-# Chạy linter & Kiểm tra kiểu dữ liệu
-make lint
-make typecheck
-
-# Xóa các tệp tạm / bộ nhớ cache
-make clean
+make install-all       # Cài đặt môi trường dev
+make test              # 326+ bài kiểm thử
+make test-unit         # Unit tests
+make test-int          # Integration tests
+make lint              # Linter
+make typecheck         # Kiểm tra kiểu
+make clean             # Xóa artifacts
 ```
 
-### Xây dựng lại Chỉ mục Vector bằng tay
+### Xây dựng lại Vector Index
 ```bash
 python scripts/rebuild_vec.py
 ```
+
+---
+
+## 🤝 Cách đóng góp
+
+```bash
+git clone https://github.com/your-username/memorymesh.git
+cd memorymesh && make install-all
+make test              # Chạy test trước khi gửi PR
+```
+
+Vui lòng đọc [CONTRIBUTING.md](CONTRIBUTING.md). Mọi đóng góp đều được trân trọng!
 
 ---
 
@@ -212,8 +264,8 @@ python scripts/rebuild_vec.py
 > [!CAUTION]
 > **RỦI RO LỘ DỮ LIỆU NGHIÊM TRỌNG**
 >
-> MemoryMesh lưu **mọi dữ liệu ở dạng văn bản thuần (plaintext)** trong các CSDL SQLite cục bộ (bên trong thư mục `./db/`).
-> **TUYỆT ĐỐI KHÔNG commit thư mục `./db/` hoặc tệp `.env` lên các kho mã nguồn công khai (như GitHub)!** Hãy luôn thêm chúng vào `.gitignore`.
+> MemoryMesh lưu **mọi dữ liệu dạng plaintext** trong SQLite (`./db/`).
+> **TUYỆT ĐỐI KHÔNG commit `./db/` hoặc `.env` lên kho công khai!** Luôn thêm chúng vào `.gitignore`.
 
 ---
 

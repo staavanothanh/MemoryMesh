@@ -1,56 +1,84 @@
-<div align="right">
-  <strong>🇺🇸 English</strong> | <a href="README.vi.md">🇻🇳 Tiếng Việt</a>
-</div>
-
 <div align="center">
   <h1>🧠 MemoryMesh</h1>
-  <p><strong>Local-first persistent memory MCP server for AI agents.</strong></p>
-
+  <p><strong>The only MCP Memory Server with Behavioral Learning + Action Control</strong></p>
+  <p>
+    <a href="README.vi.md">🇻🇳 Tiếng Việt</a>
+  </p>
   <p>
     <a href="https://github.com/features/actions"><img src="https://img.shields.io/badge/MCP-Compliant-brightgreen?style=for-the-badge&logo=quickpass" alt="MCP Compliant"></a>
     <img src="https://img.shields.io/badge/Python-3.12+-blue?style=for-the-badge&logo=python" alt="Python Version">
     <img src="https://img.shields.io/badge/Database-SQLite--vec-orange?style=for-the-badge&logo=sqlite" alt="Database">
     <img src="https://img.shields.io/badge/License-MIT-yellow?style=for-the-badge" alt="License">
     <img src="https://img.shields.io/badge/Version-0.5.0-purple?style=for-the-badge" alt="Version 0.5.0">
+    <img src="https://img.shields.io/badge/Tests-326%20passed-brightgreen?style=for-the-badge" alt="Tests">
   </p>
 </div>
+MemoryMesh is a high-performance, **local-first persistent memory MCP server** designed to give your AI agents long-term context, multi-hop reasoning, and behavioral learning — without Docker, without cloud databases, without external services.
 
-MemoryMesh is a high-performance, **local-first persistent memory MCP server** designed to give your AI agents long-term context, multi-hop reasoning, and behavioral learning capabilities without relying on external cloud databases.
+```
+┌──────────────────────────────────────────────────────────────┐
+│ pip install memorymesh → python -m memorymesh init → ready   │
+└──────────────────────────────────────────────────────────────┘
+```
 
+## 🧠 MemoryMesh vs Other MCP Memory Servers
+
+| Feature | Anthropic Official | mem0 | Zep/Graphiti | **MemoryMesh** |
+|---------|:-:|:-:|:-:|:-:|
+| GitHub Stars | ~86K | ~52K | ~24K | **new** |
+| Behavioral Learning | ❌ | ❌ | ❌ | ✅ **Instinct v2** |
+| Action Choke Point | ❌ | ❌ | ❌ | ✅ |
+| 3-tier Hybrid Search | ❌ | ❌ | ❌ | ✅ |
+| Lossless Raw History | ❌ | ❌ | ❌ | ✅ |
+| Multi-hop Knowledge Graph | ✅ | Optional (Pro $249) | ✅ | ✅ |
+| Temporal Decay | ❌ | ❌ | ✅ | ✅ |
+| MCP Tools | 9 | 9 (MCP archived) | 9 | **24** |
+| Infrastructure | JSONL file | Qdrant (self-host) | Neo4j (self-host) | **✅ Single SQLite file** |
+| Installation | npx/docker | pip + services | docker + Neo4j | **`pip install memorymesh`** |
+*MemoryMesh is new. These projects have larger ecosystems and communities. We focus on features the others don't offer.*
+**Who is this for?** AI agent developers (OpenCode, Cursor, Claude Code) who lose context between sessions · MCP enthusiasts wanting no cloud DBs or Docker · Privacy-conscious users needing air-gapped memory · Tool builders wanting 24 tools, not 9.
 ---
-
 ## 📑 Table of Contents
-
-- [✨ What's New in v0.5.0](#-whats-new-in-v050)
-- [🏗 System Architecture](#-system-architecture)
-- [🚀 Quick Start & Installation](#-quick-start--installation)
-- [⚙️ Configuration](#️-configuration)
-- [🧰 Available MCP Tools](#-available-mcp-tools)
-- [💻 CLI Usage](#-cli-usage)
-- [🛠 Development & Testing](#-development--testing)
-- [🛡️ Security Notice](#️-security-notice)
-- [📄 License](#-license)
-
+- [🎬 See It in Action](#see-it-in-action)
+- [✨ Why MemoryMesh?](#why-memorymesh)
+- [🏗 System Architecture](#system-architecture)
+- [💡 The Story Behind MemoryMesh](#the-story-behind-memorymesh)
+- [🚀 Quick Start & Installation](#quick-start-installation)
+- [⚙️ Configuration](#configuration)
+- [🧰 Available MCP Tools](#available-mcp-tools)
+- [💻 CLI Usage](#cli-usage)
+- [🛠 Development & Testing](#development-testing)
+- [🤝 Contributing](#contributing)
+- [🛡️ Security Notice](#security-notice)
+- [📄 License](#license)
 ---
-
-## ✨ What's New in v0.5.0
-
-Version 0.5.0 is a massive leap forward, introducing GraphRAG, behavioral learning, and rock-solid context management.
-
-| Feature | Description |
-| :--- | :--- |
-| **🧠 Knowledge Graph (GraphRAG)** | Native SQLite entities/relations with `trace_entity`, `query_graph`, `create_entity`. Recursive CTE for multi-hop reasoning. Safe for Plan/Read-Only modes. |
-| **🤖 Instinct v2 (Behavioral Learning)** | RAM cache with pre-compiled regex for O(1) matching. Extracts N-gram workflow patterns. Auto-applies tags when confidence > 0.8. |
-| **📜 Lossless Raw History** | Verbatim tool call logging with zlib compression via `AsyncBatchLogger`. Query with `recall_raw` — no more context lost to summarization. |
-| **⚡ Lifecycle Automation** | Compressed Context Delta (<800 tokens) on auto-recall. Lazy summarization (Orphan Recovery) for missing milestones. 15-minute idle watchdog. |
-| **📄 Dynamic Context Mgmt** | Stateless keyset (cursor) pagination. Dynamic scoring pushed directly into SQLite CTEs. Multi-threaded token counting. |
-| **🔧 Flexible Embedding** | Lightweight core via `pip install memorymesh` (no PyTorch). Optional `[local]` flag for `SentenceTransformer` local offloading. |
-
+## 🎬 See It in Action
+```
+$ pip install memorymesh
+$ python -m memorymesh init
+✔ Workspace ready at ./memorymesh/
+✔ MCP server configured for OpenCode
+  Agent: "what was I working on last session?"
+  MemoryMesh: 🔍 recall("last session context")
+              → 3 memories found (knowledge + user level)
+  Agent: ✅ continues seamlessly where it left off
+$ memorymesh stats
+🧠 Memories: 1,247 · Sessions: 34 · Entities: 89 · DB size: 4.2 MB
+```
+No context lost. No re-explaining. No cloud.
 ---
-
+## ✨ Why MemoryMesh?
+These features are unique to MemoryMesh — no other MCP memory server has them.
+**🧠 Instinct v2 (Behavioral Learning)** — N-gram pattern extraction, O(1) RAM-cached regex, auto-tagging at confidence > 0.8, reinforcement scoring.
+**⛓️ Action Choke Point** — Blocks `recall` after 5 uncommitted actions until `commit_milestone`. Hostage data cached, released instantly. Prevents context overflow.
+**🔍 3-Tier Hybrid Search** — Vector ANN (sqlite-vec) → FTS5 keyword → chronological fallback. Level-weighted scoring with workspace-aware soft penalty.
+**📜 Lossless Raw History** — Verbatim tool call logging with zlib compression. Queryable via `recall_raw` (filter by tool, success/error). No LLM summarization loss.
+**🕸️ Multi-hop GraphRAG** — Recursive CTE graph traversal. Entities, relations, cycle detection. Safe for Plan/Read-Only. Export as XML triplets.
+**📄 Dynamic Context Management** — Keyset cursor pagination (stateless). Scoring via SQLite CTEs (importance × level weight × recency decay). Multi-threaded token counting.
+**🧩 Flexible Embedding** — `pip install memorymesh` (~50MB, no PyTorch). Optional `[local]` for SentenceTransformer offline. Remote API supported.
+---
 ## 🏗 System Architecture
-
-MemoryMesh relies on a single SQLite database packed with `sqlite-vec` for vector similarity, `FTS5` for keyword search, and custom schema tables for Knowledge Graphs. 
+MemoryMesh relies on a single SQLite database packed with `sqlite-vec` for vector similarity, `FTS5` for keyword search, and custom schema tables for Knowledge Graphs.
 
 ```mermaid
 graph TD
@@ -84,34 +112,54 @@ graph TD
     MIDDLEWARE -.-> INST
     MM_SERVER <==> Storage
 ```
-
 ### 💎 Hidden Gems (Under the Hood)
-- **Zero-Latency Context (Optimistic Hydration):** Semantic anchors are pre-computed before session close. AI regains context in `<5ms`.
+- **Zero-Latency Context (Optimistic Hydration):** Semantic anchors pre-computed before session close. AI regains context in `<5ms`.
 - **3-Tier Fallback Retrieval:** 1️⃣ Semantic (sqlite-vec) → 2️⃣ FTS5 keyword → 3️⃣ Chronological scan. Prevents "amnesia hallucinations".
-- **Choke Point Mechanism:** After 5+ uncommitted actions, `recall` is blocked until `commit_milestone` is called. Prevents context overflow.
+- **Choke Point Mechanism:** After 5+ uncommitted actions, `recall` blocked until `commit_milestone`. Prevents context overflow.
 
+**⚡ Performance** (2021 MacBook Pro M1, 16GB RAM)
+| Operation | Latency |
+|-----------|---------|
+| recall (ANN, 50K vectors) | <15ms p50, <40ms p99 |
+| trace_entity (3-hop) | <5ms |
+| remember | <8ms |
+| list_memories (100 items) | <3ms |
+### 📁 Project Structure
+```
+src/memorymesh/
+├── mcp_server/          # MCP protocol: server, handlers (24 tools), tool middleware
+│   ├── handlers/        # Tool execution, filters, trackers, semantic filter
+│   └── server.py        # MCP lifecycle (stdio + SSE)
+├── memory/              # Storage: sqlite-vec ANN, FTS5, session store, graph store, instincts
+├── utils/               # Rate limiter, path sanitizer, tool middleware, schemas
+├── embedder.py          # Embedding factory (local SentenceTransformer / remote API)
+├── router.py            # LLM router client with circuit breaker + fallback pool
+├── cli.py               # CLI commands (init, stats, sessions)
+└── config.py            # 50+ env vars across 7 config dataclasses
+```
 ---
-
+## 💡 The Story Behind MemoryMesh
+I tried every MCP memory server. Anthropic's official is a great start — but 9 tools, no semantic search, no behavioral learning. Mem0 requires Qdrant and locks graphs behind $249/month. Zep's temporal graph needs Neo4j. I wanted something different.
+- **Zero infra**: One `pip install`, one SQLite file, no Docker, no cloud
+- **Behavioral learning**: The agent learns how I work, not just stores facts
+- **Action control**: Agent proves progress before recalling more context
+- **No context lost**: Every tool call preserved verbatim, not LLM-summarized
+- **24 tools**: Full CRUD on memories, sessions, entities, relationships, instincts
+MemoryMesh is the result. Built from scratch, 0→v0.5.0, 326 tests. MIT licensed. Free forever.
+---
 ## 🚀 Quick Start & Installation
-
 ### Prerequisites
 - Python **3.12+**
 - OpenAI-compatible LLM endpoint (Ollama, vLLM, OpenAI, 9Router, etc.)
-
 ### 1. Choose your installation mode:
-
-**A. Remote Embedding Mode (Lightweight)**
-Core is ~50MB. Requires a remote API for embeddings.
+**A. Remote Embedding Mode (Lightweight)** — ~50MB core, remote API for embeddings.
 ```bash
 pip install memorymesh
 ```
-
-**B. Local Embedding Mode (Fully Offline)**
-Includes `sentence-transformers` (~1.5GB). Completely private and offline.
+**B. Local Embedding Mode (Fully Offline)** — With `sentence-transformers` (~1.5GB).
 ```bash
 pip install "memorymesh[local]"
 ```
-
 **C. With Rich CLI Tools**
 ```bash
 pip install "memorymesh[cli]"
@@ -123,33 +171,27 @@ pip install "memorymesh[cli]"
 python -m memorymesh init
 ```
 This generates your `.env` file, `db/` directory, and sets up MCP configs automatically.
-
 ---
-
 ## ⚙️ Configuration
-
 Edit the generated `.env` file in your workspace:
 
 | Variable | Default | Description |
 | :--- | :--- | :--- |
 | `ROUTER_URL` | `http://127.0.0.1:20128/v1` | Your LLM endpoint URL. |
 | `DEFAULT_MODEL` | `your-model` | Primary model for summarization. |
-| `BACKGROUND_MODEL_POOL` | *(Empty)* | Comma-separated list of cheap models used for background fact extraction. |
+| `BACKGROUND_MODEL_POOL` | *(Empty)* | Comma-separated cheap models for background fact extraction. |
 | `EMBEDDING_MODE` | `local` | Set to `remote` to use an API for embeddings. |
 | `EMBEDDING_MODEL` | `paraphrase-multilingual...` | Local embedding model name. |
 | `REMOTE_EMBEDDING_API_URL` | *(Empty)* | Endpoint for remote embeddings. |
 | `REMOTE_EMBEDDING_API_KEY` | *(Empty)* | API Key for the remote embedding server. |
 | `VEC_DB_PATH` | `./db/memory.db` | Location of the SQLite database. |
-| `DEFAULT_USER_ID` | `your_user_id` | **Multi-agent isolation!** Set different IDs for different agents (e.g. `opencode-agent`, `cursor-agent`). |
+| `DEFAULT_USER_ID` | `your_user_id` | **Multi-agent isolation!** Set different IDs for different agents. |
 
 ### 🌐 Cross-Device Sync
-Place your `db/` folder in Google Drive or Dropbox. Using the same `DEFAULT_USER_ID` on different machines synchronizes the agent's memory instantly!
-
+Place your `db/` folder in Google Drive or Dropbox. Using the same `DEFAULT_USER_ID` on different machines synchronizes memory instantly!
 ---
-
 ## 🧰 Available MCP Tools
-
-MemoryMesh exposes **22 powerful MCP tools** to the agent:
+MemoryMesh exposes **24 powerful MCP tools** to the agent:
 
 | Category | Available Tools |
 | :--- | :--- |
@@ -159,64 +201,54 @@ MemoryMesh exposes **22 powerful MCP tools** to the agent:
 | **🏗️ Workspace Mgmt** | `commit_milestone`, `save_workspace_context` |
 | **🎓 Behavioral Learning**| `learn_session`, `recall_raw` |
 | **🔌 Utilities** | `ping` |
-
 ---
-
 ## 💻 CLI Usage
-
 MemoryMesh includes built-in terminal commands to inspect your databases.
-
 ```bash
 # List the last 20 sessions (Status, Workspace, Timestamps)
 memorymesh sessions --limit 20
-
 # Show rich system statistics (Entities, DB size, relations)
 memorymesh stats
-
 # Initialize a new workspace
 memorymesh init
 ```
-
 ---
-
 ## 🛠 Development & Testing
-
 Using the provided `Makefile` makes development a breeze:
-
 ```bash
 # Install everything for dev
 make install-all
-
-# Run tests (281+ robust tests covering all features)
+# Run tests (326 robust tests covering all features)
 make test
 make test-unit
 make test-int
-
 # Linter and Type Checking
 make lint
 make typecheck
-
 # Clean artifacts
 make clean
 ```
-
 ### Rebuild Vector Index Manually
 ```bash
 python scripts/rebuild_vec.py
 ```
-
 ---
+## 🤝 Contributing
+We welcome contributions! Here's how to get started:
+1. Fork the repo
+2. Run `make install-all` for dev setup
+3. Make your changes
+4. Run `make test` (326 tests should pass)
+5. Submit a PR
 
+See [CONTRIBUTING.md](CONTRIBUTING.md) for detailed guidelines (coming soon).
+---
 ## 🛡️ Security Notice
-
 > [!CAUTION]
 > **CRITICAL DATA EXPOSURE RISK**
->
-> MemoryMesh stores **all data as plaintext** in local SQLite databases (inside the `./db/` directory). 
-> **Never commit the `./db/` directory or your `.env` file to a public repository!** Always add them to `.gitignore`.
-
+> MemoryMesh stores **all data as plaintext** in local SQLite databases (inside `./db/`).
+> **Never commit `./db/` or `.env` to a public repository!** Always add to `.gitignore`.
 ---
-
 ## 📄 License
 
 MIT License © MemoryMesh
