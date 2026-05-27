@@ -63,7 +63,6 @@ class RememberInput(BaseModel):
         description="Memory level: user (personal info), session (conversation context), knowledge (general knowledge)"
     )
     workspace_path: str = Field(default="", description="Workspace path to limit scope")
-    user_id: Optional[str] = Field(default=None, description="User ID (default from config)")
 
     @field_validator("content")
     @classmethod
@@ -78,7 +77,6 @@ class RecallInput(BaseModel):
     query: str = Field(..., min_length=1, description="Query string to find memories")
     top_k: int = Field(default=5, ge=1, le=20, description="Maximum number of results")
     workspace_path: str = Field(default="", description="Limit recall by workspace")
-    user_id: Optional[str] = Field(default=None, description="User ID (default from config)")
     max_tokens: Optional[int] = Field(default=None, description="Token budget for results")
     cursor: Optional[str] = Field(default=None, description="JSON cursor for pagination: {'last_score': 0.85, 'last_id': '...', 'page': 2}. Omit for first page.")
 
@@ -112,18 +110,15 @@ class ListMemoriesInput(BaseModel):
     """Input for the list_memories tool — paginated listing."""
     limit: int = Field(default=100, ge=1, le=1000, description="Number of results")
     offset: int = Field(default=0, ge=0, description="Starting position")
-    user_id: Optional[str] = Field(default=None, description="User ID (default from config)")
 
 
 class PingInput(BaseModel):
     """Input for the ping tool — health check (no required fields)."""
-    user_id: Optional[str] = Field(default=None)
 
 
 class SaveSystemPromptInput(BaseModel):
     """Input for the save_system_prompt tool."""
     system_prompt: str = Field(..., min_length=1, description="System prompt to save")
-    user_id: Optional[str] = Field(default=None)
 
 
 class CommitMilestoneInput(BaseModel):
@@ -131,7 +126,6 @@ class CommitMilestoneInput(BaseModel):
     summary: str = Field(..., min_length=1, description="Brief summary of what was accomplished")
     tasks_done: str = Field(default="", description="Files changed, bugs fixed, or features completed")
     next_steps: str = Field(default="", description="Planned next steps")
-    user_id: Optional[str] = Field(default=None)
 
 
 class SaveContextPairInput(BaseModel):
@@ -143,7 +137,6 @@ class SaveContextPairInput(BaseModel):
 class ListSessionsInput(BaseModel):
     """Input for the list_sessions tool."""
     limit: int = Field(default=10, ge=1, le=100, description="Number of results")
-    user_id: Optional[str] = Field(default=None)
 
 
 class GetSessionContextInput(BaseModel):
@@ -156,7 +149,6 @@ class NewSessionInput(BaseModel):
     """Input for the new_session tool."""
     system_prompt: str = Field(default="", description="System prompt for the new session")
     workspace_path: str = Field(default="", description="Workspace path")
-    user_id: Optional[str] = Field(default=None)
 
 
 class EndSessionInput(BaseModel):
@@ -200,7 +192,6 @@ class CreateEntityInput(BaseModel):
     entity_type: str = Field(default="concept", description="Type of entity: concept, project, module, bug, person, tool, etc.")
     properties: Optional[str] = Field(default=None, description="Optional JSON string of entity properties/metadata")
     workspace_path: str = Field(default="", description="Workspace path to limit scope")
-    user_id: Optional[str] = Field(default=None, description="User ID (default from config)")
 
     @field_validator("entity_type")
     @classmethod
@@ -234,7 +225,6 @@ class CreateRelationInput(BaseModel):
     relation_type: str = Field(..., min_length=1, max_length=100, description="Type of relation: SOLVES, DEPENDS_ON, IMPLEMENTS, USES, HAS_PREFERENCE, etc.")
     weight: float = Field(default=1.0, ge=0.0, le=1.0, description="Relation weight/relevance (0.0-1.0)")
     workspace_path: str = Field(default="", description="Workspace path to limit scope")
-    user_id: Optional[str] = Field(default=None, description="User ID (default from config)")
 
     @field_validator("relation_type")
     @classmethod
@@ -248,7 +238,7 @@ class QueryGraphInput(BaseModel):
     entity_name: str = Field(..., min_length=1, description="Name of the entity to query")
     limit: int = Field(default=20, ge=1, le=50, description="Maximum number of relations to return")
     workspace_path: str = Field(default="", description="Workspace path to limit scope")
-    user_id: Optional[str] = Field(default=None, description="User ID (default from config)")
+
 
 class TraceEntityInput(BaseModel):
     """Input for the trace_entity tool — traverse multi-hop paths from an entity in the Knowledge Graph."""
@@ -256,7 +246,7 @@ class TraceEntityInput(BaseModel):
     max_depth: int = Field(default=3, ge=1, le=5, description="Maximum traversal depth")
     max_relations: int = Field(default=20, ge=1, le=30, description="Maximum number of relations to return")
     workspace_path: str = Field(default="", description="Workspace path to limit scope")
-    user_id: Optional[str] = Field(default=None, description="User ID (default from config)")
+
 
 class RecallRawInput(BaseModel):
     """Input for the recall_raw tool — query raw tool call history."""
@@ -269,7 +259,6 @@ class RecallRawInput(BaseModel):
 class LearnSessionInput(BaseModel):
     """Input for the learn_session tool — analyze a session and extract behavioral patterns."""
     session_id: str = Field(default="", description="Session ID to learn from (default current)")
-    user_id: Optional[str] = Field(default=None, description="User ID (default from config)")
 
 
 # ── Mapping: tool name → Pydantic model ─────────────────────────────────

@@ -48,16 +48,16 @@ def _build_dynamic_score_query(
     w_knowledge = level_weights.get("knowledge", 1.0) if level_weights else 1.0
     decay_hours = 24.0
 
-    sql = f"""
+    sql = """
         WITH scored AS (
             SELECT id, content, metadata_json, importance, level, created_at,
                    (importance *
                        CASE level
-                           WHEN 'session' THEN {w_session}
-                           WHEN 'user' THEN {w_user}
-                           ELSE {w_knowledge}
+                           WHEN 'session' THEN ?
+                           WHEN 'user' THEN ?
+                           ELSE ?
                        END *
-                       exp(-(julianday('now') - julianday(substr(created_at, 1, 19))) * 24.0 / {decay_hours})
+                       exp(-(julianday('now') - julianday(substr(created_at, 1, 19))) * 24.0 / ?)
                    ) AS dynamic_score
             FROM memories
             WHERE user_id = ? AND deleted = 0
@@ -67,7 +67,10 @@ def _build_dynamic_score_query(
         ORDER BY dynamic_score DESC, id DESC
         LIMIT ?
     """
-    params = [user_id, cursor.last_score, cursor.last_score, cursor.last_id, chunk_size]
+    params = [
+        w_session, w_user, w_knowledge, decay_hours,
+        user_id, cursor.last_score, cursor.last_score, cursor.last_id, chunk_size
+    ]
     return sql, params
 
 

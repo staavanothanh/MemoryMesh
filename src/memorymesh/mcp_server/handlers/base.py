@@ -18,7 +18,7 @@ from ...memory.fact_extractor import FactExtractor
 from ...scanner import CodebaseScanner
 from ...errors import MemoryMeshError
 from ...utils.json_parser import clean_and_parse_llm_json
-from ...utils.path_sanitizer import sanitize_workspace_path
+from ...utils.path_sanitizer import sanitize_workspace_path, safe_join_and_validate
 from ...prompts import COMBINED_AGENT_INSTRUCTION, PERMANENT_LOG_DIRECTIVE, BOOTSTRAP_SNAPSHOT_PROMPT
 
 
@@ -407,9 +407,10 @@ class ToolHandlers:
 
     async def _auto_scan_codebase(self, workspace_path: str = "", user_id: str = ""):
         try:
-            path = workspace_path or self.manager.config.default_user_id
-            if not path or path == self.manager.config.default_user_id:
-                path = os.getcwd()
+            raw_path = workspace_path or self.manager.config.default_user_id
+            if not raw_path or raw_path == self.manager.config.default_user_id:
+                raw_path = os.getcwd()
+            path = sanitize_workspace_path(raw_path)
             scanner = CodebaseScanner(workspace_path=path)
             snapshot = await asyncio.to_thread(scanner.scan)
             summary = snapshot.get("summary", "")
@@ -1413,9 +1414,9 @@ class ToolHandlers:
                 parts.append(f"# Global Instructions\n{content}")
 
         # Tier 2: Instructions directory (all .md/.txt files, sorted)
-        dir_path = os.path.join(safe_path, cfg.instructions_dir)
-        if os.path.isdir(dir_path):
-            try:
+        try:
+            dir_path = safe_join_and_validate(safe_path, cfg.instructions_dir)
+            if os.path.isdir(dir_path):
                 fnames = sorted(
                     f for f in os.listdir(dir_path)
                     if f.endswith(('.md', '.txt')) and os.path.isfile(os.path.join(dir_path, f))
@@ -1424,16 +1425,19 @@ class ToolHandlers:
                     content = await _read(os.path.join(dir_path, fname))
                     if content:
                         parts.append(content)
-            except Exception as e:
-                logger.debug("Instructions dir scan failed: %s", e)
+        except Exception as e:
+            logger.debug("Instructions dir scan failed: %s", e)
 
         # Tier 3: Auto-detect CLI/IDE files (first match wins)
         for fname in file_priority:
-            fpath = os.path.join(safe_path, fname)
-            content = await _read(fpath)
-            if content:
-                parts.append(f"# From {fname}\n{content}")
-                break
+            try:
+                fpath = safe_join_and_validate(safe_path, fname)
+                content = await _read(fpath)
+                if content:
+                    parts.append(f"# From {fname}\n{content}")
+                    break
+            except Exception as e:
+                logger.debug("Skipping priority file %s: %s", fname, e)
 
         result = "\n\n".join(parts) if parts else ""
         if result:
@@ -1475,7 +1479,13 @@ class ToolHandlers:
 
         saved = 0
         for fname in docs_files:
-            doc = await _read_doc(os.path.join(safe_path, fname))
+            try:
+                doc_path = safe_join_and_validate(safe_path, fname)
+                doc = await _read_doc(doc_path)
+            except Exception as e:
+                logger.debug("Skipping doc file %s: %s", fname, e)
+                continue
+
             if doc:
                 name, content = doc
                 try:
@@ -1689,13 +1699,14 @@ class ToolHandlers:
     async def handle_save_workspace_context(self, args: dict) -> dict:
         try:
             user_id = args.get("user_id", self.manager.config.default_user_id)
-            workspace_path = args.get("workspace_path", "")
-            if not workspace_path:
+            raw_workspace_path = args.get("workspace_path", "")
+            if not raw_workspace_path:
                 session = await self.session_store.get_session(self._current_session_id)
                 if session:
-                    workspace_path = session.get("workspace_path", "")
-            if not workspace_path:
-                workspace_path = os.getcwd()
+                    raw_workspace_path = session.get("workspace_path", "")
+            if not raw_workspace_path:
+                raw_workspace_path = os.getcwd()
+            workspace_path = sanitize_workspace_path(raw_workspace_path)
             snapshot = {"workspace_path": workspace_path, "files": [], "git": {}, "dependencies": {}}
             if os.path.isdir(workspace_path):
                 root_dirs = [d for d in os.listdir(workspace_path) if os.path.isdir(os.path.join(workspace_path, d)) and not d.startswith((".", "__"))][:30]

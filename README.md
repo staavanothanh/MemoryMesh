@@ -1,230 +1,222 @@
-<p align="center">
-  <a href="README.md"><img src="https://img.shields.io/badge/lang-en-red.svg" alt="English"></a>
-  <a href="README.vi.md"><img src="https://img.shields.io/badge/lang-vi-blue.svg" alt="Tiếng Việt"></a>
-</p>
+<div align="right">
+  <strong>🇺🇸 English</strong> | <a href="README.vi.md">🇻🇳 Tiếng Việt</a>
+</div>
 
-# MemoryMesh
+<div align="center">
+  <h1>🧠 MemoryMesh</h1>
+  <p><strong>Local-first persistent memory MCP server for AI agents.</strong></p>
 
-<p align="center">
-  <img src="https://img.shields.io/badge/MCP-Compliant-brightgreen?style=for-the-badge" alt="MCP Compliant">
-  <img src="https://img.shields.io/badge/Python-3.12+-blue?style=for-the-badge&logo=python" alt="Python Version">
-  <img src="https://img.shields.io/badge/Database-SQLite--vec-orange?style=for-the-badge&logo=sqlite" alt="Database">
-  <img src="https://img.shields.io/badge/License-MIT-yellow?style=for-the-badge" alt="License">
-  <img src="https://img.shields.io/badge/Version-0.5.0-purple?style=for-the-badge" alt="Version 0.5.0">
-</p>
+  <p>
+    <a href="https://github.com/features/actions"><img src="https://img.shields.io/badge/MCP-Compliant-brightgreen?style=for-the-badge&logo=quickpass" alt="MCP Compliant"></a>
+    <img src="https://img.shields.io/badge/Python-3.12+-blue?style=for-the-badge&logo=python" alt="Python Version">
+    <img src="https://img.shields.io/badge/Database-SQLite--vec-orange?style=for-the-badge&logo=sqlite" alt="Database">
+    <img src="https://img.shields.io/badge/License-MIT-yellow?style=for-the-badge" alt="License">
+    <img src="https://img.shields.io/badge/Version-0.5.0-purple?style=for-the-badge" alt="Version 0.5.0">
+  </p>
+</div>
 
-**Local-first persistent memory MCP server for AI agents.** v0.5.0 brings Knowledge Graphs, Behavioral Learning, Lifecycle Automation, and Dynamic Context Management.
+MemoryMesh is a high-performance, **local-first persistent memory MCP server** designed to give your AI agents long-term context, multi-hop reasoning, and behavioral learning capabilities without relying on external cloud databases.
 
-## Quick Start
+---
 
-```bash
-# Lite install (remote embedding API)
-pip install memorymesh
-# Or with local embedding model (recommended for offline use)
-pip install "memorymesh[local]"
+## 📑 Table of Contents
 
-python -m memorymesh init   # one-command setup
-opencode
-```
+- [✨ What's New in v0.5.0](#-whats-new-in-v050)
+- [🏗 System Architecture](#-system-architecture)
+- [🚀 Quick Start & Installation](#-quick-start--installation)
+- [⚙️ Configuration](#️-configuration)
+- [🧰 Available MCP Tools](#-available-mcp-tools)
+- [💻 CLI Usage](#-cli-usage)
+- [🛠 Development & Testing](#-development--testing)
+- [🛡️ Security Notice](#️-security-notice)
+- [📄 License](#-license)
 
-### CLI Tools
+---
 
-```bash
-memorymesh sessions --limit 20   # list recent sessions
-memorymesh stats                 # show system statistics
-memorymesh init                  # initialize workspace
-```
+## ✨ What's New in v0.5.0
 
-## What's New in v0.5.0
+Version 0.5.0 is a massive leap forward, introducing GraphRAG, behavioral learning, and rock-solid context management.
 
 | Feature | Description |
-|---------|-------------|
-| **🧠 Knowledge Graph** | SQLite entities/relations with `trace_entity`, `query_graph`, `create_entity`, `create_relation`. Recursive CTE for multi-hop reasoning. XML Triplet output. Safe for Plan/Read-Only mode. |
-| **📜 Lossless Raw History** | Verbatim tool call logging with zlib compression via AsyncBatchLogger. Query with `recall_raw` — no more lost context on compaction. |
-| **🤖 Behavioral Learning (Instinct v2)** | RAM cache with pre-compiled regex for O(1) matching. N-gram workflow pattern extraction. Auto-apply tags when confidence > 0.8. Project-scoped instincts. |
-| **⚡ Lifecycle Automation** | Compressed Context Delta (<800 tokens) on auto-recall. Lazy summarization (Orphan Recovery) for missing milestones. Idle watchdog (15 min). |
-| **📄 Dynamic Context Management** | Stateless keyset (cursor) pagination. Dynamic scoring pushed to SQLite CTEs. Multi-threaded token counting. |
-| **🔧 Embedding Offloading** | Lightweight core: `pip install memorymesh` (no PyTorch). Optional `[local]` for SentenceTransformer. Or use remote embedding API. |
-| **🛡️ Robustness** | `_safe_task_wrapper` for all background tasks. Retry with exponential backoff. Silent failure detection & logging at `ERROR` level. |
+| :--- | :--- |
+| **🧠 Knowledge Graph (GraphRAG)** | Native SQLite entities/relations with `trace_entity`, `query_graph`, `create_entity`. Recursive CTE for multi-hop reasoning. Safe for Plan/Read-Only modes. |
+| **🤖 Instinct v2 (Behavioral Learning)** | RAM cache with pre-compiled regex for O(1) matching. Extracts N-gram workflow patterns. Auto-applies tags when confidence > 0.8. |
+| **📜 Lossless Raw History** | Verbatim tool call logging with zlib compression via `AsyncBatchLogger`. Query with `recall_raw` — no more context lost to summarization. |
+| **⚡ Lifecycle Automation** | Compressed Context Delta (<800 tokens) on auto-recall. Lazy summarization (Orphan Recovery) for missing milestones. 15-minute idle watchdog. |
+| **📄 Dynamic Context Mgmt** | Stateless keyset (cursor) pagination. Dynamic scoring pushed directly into SQLite CTEs. Multi-threaded token counting. |
+| **🔧 Flexible Embedding** | Lightweight core via `pip install memorymesh` (no PyTorch). Optional `[local]` flag for `SentenceTransformer` local offloading. |
 
-## Architecture
+---
+
+## 🏗 System Architecture
+
+MemoryMesh relies on a single SQLite database packed with `sqlite-vec` for vector similarity, `FTS5` for keyword search, and custom schema tables for Knowledge Graphs. 
 
 ```mermaid
 graph TD
-    LLM[Agent / LLM] -->|call_tool| MM[MemoryMesh MCP Server]
+    %% Styling
+    classDef client fill:#f9f9fb,stroke:#d0d0d5,stroke-width:2px;
+    classDef core fill:#eef2ff,stroke:#6366f1,stroke-width:2px;
+    classDef db fill:#f0fdf4,stroke:#22c55e,stroke-width:2px;
+    classDef cache fill:#fffbeb,stroke:#f59e0b,stroke-width:2px;
 
-    subgraph MM[MemoryMesh Server]
-        VEC[(sqlite-vec ANN)] --- FTS[(FTS5 Full-Text)]
-        VEC --- G[(Knowledge Graph entities/relations)]
-        RAW[(Raw History Log)] --- SESS[(Session Store)]
-        INST[(Instinct RAM Cache)] --- MIDDLEWARE[Tool Execution Middleware]
+    %% Nodes
+    LLM["🤖 AI Agent (OpenCode, Cursor, etc.)"]:::client
+    MM_SERVER["⚙️ MemoryMesh MCP Server"]:::core
+
+    subgraph Storage ["💽 Local SQLite Engine"]
+        VEC[("🔍 Vector ANN (sqlite-vec)")]:::db
+        FTS[("🔤 Full-Text (FTS5)")]:::db
+        G[("🕸️ Knowledge Graph (Entities/Relations)")]:::db
+        RAW[("📜 Lossless Raw History")]:::db
+        SESS[("📂 Session Store")]:::db
     end
 
-    MM -->|recall(query, cursor?)| LLM
-    LLM -->|create_entity / create_relation| G
+    subgraph Memory ["⚡ In-Memory"]
+        INST["🧠 RAM Cache (Instincts)"]:::cache
+        MIDDLEWARE["🛠️ Tool Execution Middleware"]:::cache
+    end
+
+    %% Connections
+    LLM -->|"1. call_tool"| MM_SERVER
+    MM_SERVER -->|"2. recall / trace_entity"| LLM
+    MM_SERVER -.-> MIDDLEWARE
+    MIDDLEWARE -.-> INST
+    MM_SERVER <==> Storage
 ```
 
-**Key design:**
-- Single SQLite DB with sqlite-vec for vector search + FTS5 for keyword + Graph tables for relations
-- Background tasks (enrichment, consolidation, fact extraction) are rate-limited with automatic retries
-- Session-level memories auto-expire after 7 days
-- All background tasks wrapped in `_safe_task_wrapper` — zero silent failures
-
-### 22 MCP Tools
-
-| Category | Tools |
-|----------|-------|
-| **Memory** | `remember`, `recall`, `forget`, `archive_memory`, `unarchive_memory`, `list_memories` |
-| **Knowledge Graph** | `create_entity`, `create_relation`, `query_graph`, `trace_entity` |
-| **Session Lifecycle** | `new_session`, `end_session`, `resume_session`, `delete_session`, `list_sessions`, `get_session_context`, `save_system_prompt`, `preserve_session_memories` |
-| **Workspace** | `commit_milestone`, `save_workspace_context`, `save_context_pair` (deprecated) |
-| **Learning** | `learn_session`, `recall_raw` |
-| **Utility** | `ping` |
-
-### Hidden Gems (Under the Hood)
-
-MemoryMesh is packed with subtle architectural decisions designed to make the AI feel more like a human colleague:
-
-- **Zero-Latency Context (Optimistic Hydration):** Pre-computes semantic anchors before session close. Stored in RAM Cache — AI regains context in `<5ms`.
-- **3-Tier Fallback Retrieval:** 1. Semantic (sqlite-vec) → 2. FTS5 keyword → 3. Chronological scan. Zero "hallucinations from amnesia".
+### 💎 Hidden Gems (Under the Hood)
+- **Zero-Latency Context (Optimistic Hydration):** Semantic anchors are pre-computed before session close. AI regains context in `<5ms`.
+- **3-Tier Fallback Retrieval:** 1️⃣ Semantic (sqlite-vec) → 2️⃣ FTS5 keyword → 3️⃣ Chronological scan. Prevents "amnesia hallucinations".
 - **Choke Point Mechanism:** After 5+ uncommitted actions, `recall` is blocked until `commit_milestone` is called. Prevents context overflow.
-- **GraphRAG via SQLite CTE:** Multi-hop relation traversal uses SQL `WITH RECURSIVE` — no external graph DB needed.
-- **JIT Instinct Injection:** Tool execution middleware with sliding window (deque maxlen=5). Matches against compiled regex instincts in microseconds.
-- **Hybrid Pagination:** Keyset cursor pagination with dynamic scoring pushed to SQLite — O(1) deep page performance.
 
-## Installation
+---
+
+## 🚀 Quick Start & Installation
 
 ### Prerequisites
 - Python **3.12+**
-- An OpenAI-compatible LLM endpoint (Ollama, vLLM, OpenAI, 9Router, etc.)
+- OpenAI-compatible LLM endpoint (Ollama, vLLM, OpenAI, 9Router, etc.)
 
-### Lightweight Install (Remote Embedding)
+### 1. Choose your installation mode:
+
+**A. Remote Embedding Mode (Lightweight)**
+Core is ~50MB. Requires a remote API for embeddings.
 ```bash
 pip install memorymesh
 ```
-Core is ~50MB. Embedding computed via remote API (set `EMBEDDING_MODE=remote` + `REMOTE_EMBEDDING_API_URL`).
 
-### Full Install (Local Embedding)
+**B. Local Embedding Mode (Fully Offline)**
+Includes `sentence-transformers` (~1.5GB). Completely private and offline.
 ```bash
 pip install "memorymesh[local]"
 ```
-Includes `sentence-transformers` (~1.5GB). Embedding computed locally — fully offline.
 
-### With CLI (Rich Tables)
+**C. With Rich CLI Tools**
 ```bash
 pip install "memorymesh[cli]"
+# Or install everything: pip install "memorymesh[local,cli]"
 ```
 
-### Development
+### 2. Initialize the Workspace
 ```bash
-pip install -e ".[test,local,cli]"
+python -m memorymesh init
 ```
+This generates your `.env` file, `db/` directory, and sets up MCP configs automatically.
 
-### Environment
+---
 
-Copy `.env.example` to `.env` and edit:
+## ⚙️ Configuration
+
+Edit the generated `.env` file in your workspace:
 
 | Variable | Default | Description |
-|----------|---------|-------------|
-| `ROUTER_URL` | `http://127.0.0.1:20128/v1` | LLM endpoint |
-| `DEFAULT_MODEL` | `your-model` | Primary LLM model |
-| `BACKGROUND_MODEL_POOL` | — | Comma-separated list of free/cheap models for background tasks |
-| `EMBEDDING_MODE` | `local` | `local` (SentenceTransformer) or `remote` (API) |
-| `EMBEDDING_MODEL` | `paraphrase-multilingual-MiniLM-L12-v2` | Local embedding model name |
-| `REMOTE_EMBEDDING_API_URL` | — | Remote embedding endpoint |
-| `REMOTE_EMBEDDING_API_KEY` | — | API key for remote embedding |
-| `VEC_DB_PATH` | `./db/memory.db` | SQLite database path |
-| `AUTO_EXTRACT_FACTS` | `true` | Set to `false` to disable automatic fact extraction |
-| `DEFAULT_USER_ID` | `your_user_id` | Default user (for multi-agent isolation) |
+| :--- | :--- | :--- |
+| `ROUTER_URL` | `http://127.0.0.1:20128/v1` | Your LLM endpoint URL. |
+| `DEFAULT_MODEL` | `your-model` | Primary model for summarization. |
+| `BACKGROUND_MODEL_POOL` | *(Empty)* | Comma-separated list of cheap models used for background fact extraction. |
+| `EMBEDDING_MODE` | `local` | Set to `remote` to use an API for embeddings. |
+| `EMBEDDING_MODEL` | `paraphrase-multilingual...` | Local embedding model name. |
+| `REMOTE_EMBEDDING_API_URL` | *(Empty)* | Endpoint for remote embeddings. |
+| `REMOTE_EMBEDDING_API_KEY` | *(Empty)* | API Key for the remote embedding server. |
+| `VEC_DB_PATH` | `./db/memory.db` | Location of the SQLite database. |
+| `DEFAULT_USER_ID` | `your_user_id` | **Multi-agent isolation!** Set different IDs for different agents (e.g. `opencode-agent`, `cursor-agent`). |
 
-## CLI Reference
+### 🌐 Cross-Device Sync
+Place your `db/` folder in Google Drive or Dropbox. Using the same `DEFAULT_USER_ID` on different machines synchronizes the agent's memory instantly!
 
-### `memorymesh sessions`
-List recent sessions with status, workspace, timestamps.
+---
 
-### `memorymesh stats`
-Show system statistics: session count, memory count, graph entities/relations, DB sizes.
+## 🧰 Available MCP Tools
 
-### `memorymesh init`
-One-command workspace setup — creates `.env`, `db/` directory, and MCP config.
+MemoryMesh exposes **22 powerful MCP tools** to the agent:
 
-## Testing
+| Category | Available Tools |
+| :--- | :--- |
+| **🧠 Memory Operations** | `remember`, `recall`, `forget`, `archive_memory`, `unarchive_memory`, `list_memories` |
+| **🕸️ Knowledge Graph** | `create_entity`, `create_relation`, `query_graph`, `trace_entity` |
+| **⏳ Session Lifecycle** | `new_session`, `end_session`, `resume_session`, `delete_session`, `list_sessions`, `get_session_context`, `save_system_prompt`, `preserve_session_memories` |
+| **🏗️ Workspace Mgmt** | `commit_milestone`, `save_workspace_context` |
+| **🎓 Behavioral Learning**| `learn_session`, `recall_raw` |
+| **🔌 Utilities** | `ping` |
+
+---
+
+## 💻 CLI Usage
+
+MemoryMesh includes built-in terminal commands to inspect your databases.
 
 ```bash
-make test          # run all tests
-make test-unit     # unit tests only
-make test-int      # integration tests only
+# List the last 20 sessions (Status, Workspace, Timestamps)
+memorymesh sessions --limit 20
+
+# Show rich system statistics (Entities, DB size, relations)
+memorymesh stats
+
+# Initialize a new workspace
+memorymesh init
 ```
 
-281+ tests covering:
-- Memory CRUD, search fallback, consolidation, fact extraction
-- Graph entities/relations, recursive CTE, cyclic detection
-- Raw history logging, batch compression
-- Instinct learning, N-gram extraction, RAM cache O(1) matching
-- Lifecycle automation, orphan recovery, context delta
-- Keyset cursor pagination, dynamic scoring
-- Embedding factory, graceful fallback
+---
 
-## Project Structure
+## 🛠 Development & Testing
 
-```
-src/memorymesh/
-  cli.py                  CLI tools (sessions, stats, init)
-  config.py               App configuration (dataclasses + env)
-  router.py               LLM router client (retry + circuit breaker)
-  embedder.py             Embedding interface (factory-based)
-  embeddings/
-    factory.py            EmbeddingFactory (local/remote)
-    providers.py          LocalEmbeddingProvider & RemoteEmbeddingProvider
-  memory/
-    manager.py            Core CRUD + scoring + background tasks
-    sqlite_vec_backend.py Single-DB: vector + FTS5 + metadata + graph
-    graph_store.py        Knowledge Graph entities/relations + CTE
-    context_manager.py    Keyset cursor pagination + dynamic scoring
-    consolidation.py      Clustering + merge + TTL expiry
-    fact_extractor.py     Atomic fact extraction
-    instinct.py           Pattern learning engine
-    instinct_store.py     Instinct DB (v1 + v2 regex-based)
-    instinct_manager.py   RAM cache + pre-compiled regex + N-gram extraction
-    session_store.py      Session lifecycle + raw log + workspace snapshots
-    async_batch_logger.py zlib-compressed batch logging
-    codebase_adapter.py   External DB read-only ACL adapter
-  mcp_server/
-    server.py             MCP server lifecycle + idle watchdog
-    handlers/             Modular handler package (5 files)
-      base.py             ToolHandlers class
-      _core.py            Shared constants & helpers
-      semantic_filter.py  Noise detection
-      tracker.py          Conversation tracker + choke point
-tools/
-    tools.py              Tool schema definitions
-tests/
-    281+ tests (pytest, asyncio_mode=auto)
+Using the provided `Makefile` makes development a breeze:
+
+```bash
+# Install everything for dev
+make install-all
+
+# Run tests (281+ robust tests covering all features)
+make test
+make test-unit
+make test-int
+
+# Linter and Type Checking
+make lint
+make typecheck
+
+# Clean artifacts
+make clean
 ```
 
-## Multi-Agent & Cross-Device Sync
-
-MemoryMesh uses `DEFAULT_USER_ID` for seamless multi-agent isolation:
-
-- **Same machine, multiple agents:** Set different `DEFAULT_USER_ID` values for OpenCode vs Cline vs Cursor — isolated memory contexts.
-- **Cross-device sync:** Place `db/` on Google Drive / Dropbox. Same `DEFAULT_USER_ID` = synchronized memory across machines.
-
-## Security Notice
-
-> [!CAUTION]
-> **CRITICAL:** MemoryMesh stores all data as **plaintext** in SQLite databases (`./db/`). Never commit these to a public repository.
-> ```
-> db/
-> .env
-> ```
-
-## Maintenance
-
-### Rebuild Vector Index
+### Rebuild Vector Index Manually
 ```bash
 python scripts/rebuild_vec.py
 ```
 
-## License
+---
 
-MIT
+## 🛡️ Security Notice
+
+> [!CAUTION]
+> **CRITICAL DATA EXPOSURE RISK**
+>
+> MemoryMesh stores **all data as plaintext** in local SQLite databases (inside the `./db/` directory). 
+> **Never commit the `./db/` directory or your `.env` file to a public repository!** Always add them to `.gitignore`.
+
+---
+
+## 📄 License
+
+MIT License © MemoryMesh

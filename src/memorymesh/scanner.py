@@ -65,19 +65,20 @@ class CodebaseScanner:
         return entries
 
     def _read_key_files(self) -> Dict[str, str]:
+        from .utils.path_sanitizer import safe_join_and_validate
         results = {}
         key_files = [
             "README.md", "Makefile", ".env.example",
             "pyproject.toml", ".opencode.json",
         ]
         for fname in key_files:
-            path = os.path.join(self.workspace_path, fname)
-            if os.path.isfile(path):
-                try:
+            try:
+                path = safe_join_and_validate(self.workspace_path, fname)
+                if os.path.exists(path) and os.path.getsize(path) < SCAN_MAX_BYTES:
                     with open(path, "r", encoding="utf-8", errors="replace") as f:
                         results[fname] = f.read(2000)
-                except Exception as e:
-                    logger.debug("Could not read %s: %s", fname, e)
+            except Exception:
+                pass
         return results
 
     def scan(self) -> Dict[str, Any]:
