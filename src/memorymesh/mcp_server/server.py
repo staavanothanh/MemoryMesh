@@ -79,7 +79,7 @@ class MemoryMeshServer:
         self.session_store = SessionStore(config.session.db_path)
         self.handlers = ToolHandlers(self.manager, self.session_store)
         self.batch_logger = AsyncBatchLogger(config.session.db_path)
-        self.instinct_manager = InstinctManager(self.manager.instinct_store)
+        self.instinct_manager = InstinctManager(self.manager.instinct_store, config=self.config.instinct)
         self.tool_middleware = ToolExecutionMiddleware(self.instinct_manager)
         self.mcp_server = Server("memorymesh")
         self._idle_timer: Optional[asyncio.TimerHandle] = None
@@ -144,6 +144,7 @@ class MemoryMeshServer:
                 "trace_entity": self.handlers.handle_trace_entity,
                 "recall_raw": self.handlers.handle_recall_raw,
                 "learn_session": self.handlers.handle_learn_session,
+                "merge_entities": self.handlers.handle_merge_entities,
             }
             handler = handler_map.get(name)
             if not handler:
@@ -263,6 +264,7 @@ class MemoryMeshServer:
     async def _initialize_fast(self):
         """Fast init: open DBs, warm embedder, and create a fresh session."""
         await self.backend.initialize()
+        self.backend.start_wal_checkpoint()
         await self.session_store.initialize()
         if self.config.instinct.enabled:
             await self.manager.instinct_store.initialize()

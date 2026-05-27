@@ -260,6 +260,19 @@ class LearnSessionInput(BaseModel):
     """Input for the learn_session tool — analyze a session and extract behavioral patterns."""
     session_id: str = Field(default="", description="Session ID to learn from (default current)")
 
+class MergeEntitiesInput(BaseModel):
+    """Input for the merge_entities tool — merge two knowledge graph entities."""
+    source: str = Field(..., min_length=1, max_length=200, description="Name of the source entity (will be merged into target)")
+    target: str = Field(..., min_length=1, max_length=200, description="Name of the target entity (will absorb source)")
+    user_id: str = Field(default="", description="User ID (defaults to configured user)")
+
+    @field_validator("source")
+    @classmethod
+    def source_not_equal_target(cls, v: str, info) -> str:
+        if "target" in info.data and v.strip().lower() == info.data["target"].strip().lower():
+            raise ValueError("source and target must be different entities")
+        return v
+
 
 # ── Mapping: tool name → Pydantic model ─────────────────────────────────
 
@@ -288,6 +301,7 @@ TOOL_INPUT_MODELS: dict[str, type[BaseModel]] = {
     "trace_entity": TraceEntityInput,
     "recall_raw": RecallRawInput,
     "learn_session": LearnSessionInput,
+    "merge_entities": MergeEntitiesInput,
 }
 
 

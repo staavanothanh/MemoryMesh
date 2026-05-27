@@ -19,7 +19,8 @@ async def middleware():
             trigger_regex TEXT NOT NULL,
             reaction TEXT NOT NULL,
             confidence_score REAL DEFAULT 0.0,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            active INTEGER NOT NULL DEFAULT 1
         )
     """)
     await store._db.execute("""

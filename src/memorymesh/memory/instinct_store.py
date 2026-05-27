@@ -8,6 +8,8 @@ from typing import Optional, List, Dict, Any
 
 import aiosqlite
 
+from ..config import InstinctConfig
+
 logger = logging.getLogger(__name__)
 
 
@@ -27,8 +29,9 @@ class InstinctStore:
         "workspace_path": "workspace_path TEXT DEFAULT ''",
     }
 
-    def __init__(self, db_path: str):
+    def __init__(self, db_path: str, config: Optional[InstinctConfig] = None):
         self.db_path = db_path
+        self.config = config or InstinctConfig()
         self._db: Optional[aiosqlite.Connection] = None
 
     async def initialize(self):
@@ -74,6 +77,7 @@ class InstinctStore:
             CREATE INDEX IF NOT EXISTS idx_instincts_v2_project
             ON instincts_v2(project_id, confidence_score DESC)
         """)
+        await self._migrate_v2_schema()
 
         await self._db.commit()
         logger.info("InstinctStore initialized at %s", self.db_path)
@@ -91,6 +95,16 @@ class InstinctStore:
                 logger.info("Schema migration: %s", stmt)
             except Exception as e:
                 logger.warning("Schema migration failed for %s: %s", stmt, e)
+
+    async def _migrate_v2_schema(self):
+        cursor = await self._db.execute("PRAGMA table_info(instincts_v2)")
+        existing = {row["name"] for row in await cursor.fetchall()}
+        if "active" not in existing:
+            try:
+                await self._db.execute("ALTER TABLE instincts_v2 ADD COLUMN active INTEGER NOT NULL DEFAULT 1")
+                logger.info("Schema migration: added active to instincts_v2")
+            except Exception as e:
+                logger.warning("Schema migration failed for instincts_v2: %s", e)
 
     async def close(self):
         if self._db:
@@ -178,13 +192,42 @@ class InstinctStore:
 
     # ── Instincts v2: regex-based, project-scoped ────────────────────────
 
+    async def count_active_v2(self, project_id: str) -> int:
+        try:
+            cursor = await self._db.execute(
+                "SELECT COUNT(*) as cnt FROM instincts_v2 WHERE project_id = ? AND active = 1",
+                (project_id,),
+            )
+            row = await cursor.fetchone()
+            return row["cnt"] if row else 0
+        except Exception:
+            return 0
+
     async def add_instinct_v2(
         self,
         project_id: str,
         trigger_regex: str,
         reaction: str,
         confidence_score: float = 0.0,
-    ) -> int:
+    ) -> Optional[int]:
+        count = await self.count_active_v2(project_id)
+        if count >= self.config.v2_max_instincts:
+            logger.warning(
+                "V2 cap reached for project %s: %d >= %d. Deactivating lowest-confidence instinct.",
+                project_id, count, self.config.v2_max_instincts,
+            )
+            cursor = await self._db.execute(
+                """SELECT id FROM instincts_v2
+                   WHERE project_id = ? AND active = 1
+                   ORDER BY confidence_score ASC LIMIT 1""",
+                (project_id,),
+            )
+            row = await cursor.fetchone()
+            if row:
+                await self._db.execute(
+                    "UPDATE instincts_v2 SET active = 0 WHERE id = ?",
+                    (row["id"],),
+                )
         cursor = await self._db.execute(
             "INSERT INTO instincts_v2 (project_id, trigger_regex, reaction, confidence_score) VALUES (?, ?, ?, ?)",
             (project_id, trigger_regex, reaction, round(confidence_score, 4)),
@@ -194,7 +237,7 @@ class InstinctStore:
 
     async def get_instincts_v2(self, project_id: str) -> List[Dict[str, Any]]:
         cursor = await self._db.execute(
-            "SELECT * FROM instincts_v2 WHERE project_id = ? ORDER BY confidence_score DESC",
+            "SELECT * FROM instincts_v2 WHERE project_id = ? AND active = 1 ORDER BY confidence_score DESC",
             (project_id,),
         )
         rows = await cursor.fetchall()
@@ -202,6 +245,13 @@ class InstinctStore:
 
     async def delete_instinct_v2(self, instinct_id: int):
         await self._db.execute("DELETE FROM instincts_v2 WHERE id = ?", (instinct_id,))
+        await self._db.commit()
+
+    async def deactivate_instinct_v2(self, instinct_id: int):
+        await self._db.execute(
+            "UPDATE instincts_v2 SET active = 0 WHERE id = ?",
+            (instinct_id,),
+        )
         await self._db.commit()
 
     async def get_all_projects_v2(self) -> List[str]:

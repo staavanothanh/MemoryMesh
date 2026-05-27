@@ -63,10 +63,10 @@ class MemoryManager:
         self.backend = backend
         self.router = router
         self.hooks = hooks
-        self._write_lock = asyncio.Lock()
+        self._write_lock = asyncio.Semaphore(config.sqlite_vec.max_concurrent_writes)
         self._tokenizer = tiktoken.get_encoding("cl100k_base")
         self._consolidator = ConsolidationEngine(config, backend, router)
-        self.instinct_store = InstinctStore(config.instinct.db_path)
+        self.instinct_store = InstinctStore(config.instinct.db_path, config=config.instinct)
         self.instinct_engine = InstinctEngine(config, backend, self.instinct_store)
         self.graph: Optional[GraphStore] = None
         self.context_manager: Optional[ContextManager] = None

@@ -32,15 +32,16 @@ class TransactionContext:
     Works with aiosqlite < 0.23 (no built-in transaction() method).
     """
 
-    MAX_RETRIES = 5
-    BASE_DELAY = 0.05  # 50ms
+    MAX_RETRIES = 10
+    BASE_DELAY = 0.02  # 20ms initial, faster backoff start
 
-    def __init__(self, db: aiosqlite.Connection):
+    def __init__(self, db: aiosqlite.Connection, max_retries: Optional[int] = None):
         self._db = db
+        self._max_retries = max_retries or self.MAX_RETRIES
 
     async def __aenter__(self):
         last_error = None
-        for attempt in range(self.MAX_RETRIES):
+        for attempt in range(self._max_retries):
             try:
                 await self._db.execute("BEGIN")
                 return self
@@ -48,7 +49,7 @@ class TransactionContext:
                 err_str = str(e).lower()
                 if "database is locked" in err_str or "database is busy" in err_str:
                     last_error = e
-                    delay = self.BASE_DELAY * (2 ** attempt) + random.uniform(0, 0.05)
+                    delay = self.BASE_DELAY * (2 ** attempt) + random.uniform(0, 0.02)
                     await asyncio.sleep(delay)
                     continue
                 raise
@@ -95,6 +96,8 @@ class SqliteVecBackend:
         self.db_path = db_path
         self._db: Optional[aiosqlite.Connection] = None
         self.graph: Optional[GraphStore] = None
+        self._wal_task: Optional[asyncio.Task] = None
+        self._wal_interval: float = 30.0
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -131,9 +134,37 @@ class SqliteVecBackend:
         logger.info("SqliteVecBackend initialized at %s", self.db_path)
 
     async def close(self):
+        await self.stop_wal_checkpoint()
         if self._db:
             await self._db.close()
             self._db = None
+
+    async def _wal_checkpoint_loop(self):
+        while True:
+            try:
+                await asyncio.sleep(self._wal_interval)
+                if self._db:
+                    cursor = await self._db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                    row = await cursor.fetchone()
+                    if row:
+                        logger.debug("WAL checkpoint: %s", row)
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.warning("WAL checkpoint error: %s", e)
+
+    def start_wal_checkpoint(self):
+        if self._wal_task is None:
+            self._wal_task = asyncio.create_task(self._wal_checkpoint_loop())
+
+    async def stop_wal_checkpoint(self):
+        if self._wal_task:
+            self._wal_task.cancel()
+            try:
+                await self._wal_task
+            except asyncio.CancelledError:
+                pass
+            self._wal_task = None
 
     async def _create_schema(self):
         # Table 1: metadata master
@@ -341,13 +372,13 @@ class SqliteVecBackend:
         merged = {**existing["metadata"], **metadata, "updated_at": now}
         importance = metadata.get("importance", existing["importance"])
         new_level = metadata.get("level", existing.get("level"))
-        await self._db.execute(
-            """UPDATE memories
-               SET metadata_json=?, importance=?, level=?, updated_at=?
-               WHERE id=?""",
-            (json.dumps(merged), importance, new_level, now, memory_id),
-        )
-        await self._db.commit()
+        async with TransactionContext(self._db):
+            await self._db.execute(
+                """UPDATE memories
+                   SET metadata_json=?, importance=?, level=?, updated_at=?
+                   WHERE id=?""",
+                (json.dumps(merged), importance, new_level, now, memory_id),
+            )
         return True
 
     async def update_embedding(self, memory_id: str, embedding: List[float]) -> bool:
@@ -357,11 +388,11 @@ class SqliteVecBackend:
         import numpy as np
         vec_bytes = np.array(normalized, dtype=np.float32).tobytes()
         try:
-            await self._db.execute(
-                "UPDATE vec_memories SET embedding = ? WHERE memory_id = ?",
-                (vec_bytes, memory_id),
-            )
-            await self._db.commit()
+            async with TransactionContext(self._db):
+                await self._db.execute(
+                    "UPDATE vec_memories SET embedding = ? WHERE memory_id = ?",
+                    (vec_bytes, memory_id),
+                )
             return True
         except Exception as e:
             logger.error("Embedding update failed for %s: %s", memory_id[:12], e)
@@ -396,12 +427,12 @@ class SqliteVecBackend:
     async def soft_delete(self, memory_id: str) -> bool:
         """Mark memory as deleted (keeps vec + fts — trigger handles cleanup)."""
         now = datetime.now(timezone.utc).isoformat()
-        cursor = await self._db.execute(
-            "UPDATE memories SET deleted=1, updated_at=? WHERE id=? AND deleted=0",
-            (now, memory_id),
-        )
-        await self._db.commit()
-        return cursor.rowcount > 0
+        async with TransactionContext(self._db):
+            cursor = await self._db.execute(
+                "UPDATE memories SET deleted=1, updated_at=? WHERE id=? AND deleted=0",
+                (now, memory_id),
+            )
+            return cursor.rowcount > 0
 
     # ------------------------------------------------------------------
     # Search — ANN via subquery pattern

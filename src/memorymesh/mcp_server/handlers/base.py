@@ -51,7 +51,7 @@ class ToolHandlers:
         self._last_depth_check_time: float = 0.0
         self._trackers: TTLCache = TTLCache(maxsize=500, ttl=7200)
         self._tracker_lock = asyncio.Lock()
-        self._write_queue: asyncio.Queue = asyncio.Queue(maxsize=100)
+        self._write_queue: asyncio.Queue = asyncio.Queue(maxsize=500)
         self._write_worker_task: Optional[asyncio.Task] = None
         self._background_tasks: set[asyncio.Task] = set()
 
@@ -70,7 +70,10 @@ class ToolHandlers:
     async def _get_tracker(self, session_id: str) -> ConversationTracker:
         async with self._tracker_lock:
             if session_id not in self._trackers:
-                self._trackers[session_id] = ConversationTracker(session_id)
+                self._trackers[session_id] = ConversationTracker(
+                    session_id,
+                    choke_point_enabled=self.manager.config.ecc_integration.choke_point_enabled,
+                )
             return self._trackers[session_id]
 
     async def _record_tool_call(self, session_id: str, name: str, args: dict):
@@ -109,9 +112,11 @@ class ToolHandlers:
     async def _write_worker(self):
         while True:
             try:
-                task = await self._write_queue.get()
+                task = await asyncio.wait_for(self._write_queue.get(), timeout=30.0)
                 await self.manager.add_memory(**task)
                 self._write_queue.task_done()
+            except asyncio.TimeoutError:
+                continue
             except asyncio.CancelledError:
                 break
             except Exception as e:
@@ -304,6 +309,8 @@ class ToolHandlers:
     async def save_auto_tool_context(self, tool_name: str, args: dict, result: dict):
         if not self._current_session_id:
             return
+        if not self.manager.config.ecc_integration.auto_save_tool_context:
+            return
         try:
             session_tag = self._session_tag()
             match tool_name:
@@ -457,6 +464,8 @@ class ToolHandlers:
         Also saves the compact_summary as a standalone session summary.
         Returns the stored text for RAM caching, or None on failure.
         """
+        if not self.manager.config.ecc_integration.bootstrap_snapshots:
+            return None
         uid = user_id or self.manager.config.default_user_id
         try:
             log = await self.session_store.get_context_log(session_id, limit=self.manager.config.session.compact_threshold)
@@ -1126,6 +1135,27 @@ class ToolHandlers:
             }
         except Exception as e:
             logger.error("trace_entity failed: %s", e)
+            return {"status": "error", "error": str(e)}
+
+    async def handle_merge_entities(self, args: dict) -> dict:
+        if not await self._ensure_graph():
+            return {"status": "error", "error": "Knowledge Graph not initialized"}
+        try:
+            user_id = args.get("user_id", self.manager.config.default_user_id)
+            result = await self.manager.graph.merge_entities(
+                source_name=args["source"],
+                target_name=args["target"],
+                user_id=user_id,
+            )
+            if result.get("success"):
+                await self._log_context(
+                    "assistant",
+                    f"Merged entity '{args['source']}' -> '{args['target']}': {result.get('relations_migrated', 0)} relations migrated",
+                    "merge_entities", str(args),
+                )
+            return {"status": "success" if result.get("success") else "error", "data": result}
+        except Exception as e:
+            logger.error("merge_entities failed: %s", e)
             return {"status": "error", "error": str(e)}
 
     async def handle_save_system_prompt(self, args: dict) -> dict:

@@ -27,6 +27,7 @@ from ..schemas import (
     TraceEntityInput,
     RecallRawInput,
     LearnSessionInput,
+    MergeEntitiesInput,
 )
 
 
@@ -174,5 +175,10 @@ TOOLS = [
         name="learn_session",
         description="Analyze a session's tool call history and extract behavioral patterns as instincts. Identifies frequent workflow sequences and tag patterns.",
         inputSchema=_schema(LearnSessionInput),
+    ),
+    Tool(
+        name="merge_entities",
+        description="Merge two knowledge graph entities into one. All relations from the source entity are re-pointed to the target entity, then the source entity is deleted.",
+        inputSchema=_schema(MergeEntitiesInput),
     ),
 ]

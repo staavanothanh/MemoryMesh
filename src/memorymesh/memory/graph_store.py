@@ -1,4 +1,5 @@
 import json
+import re
 import uuid
 import logging
 import asyncio
@@ -61,9 +62,25 @@ class GraphStore:
         await self._db.execute(
             "CREATE INDEX IF NOT EXISTS idx_relations_type ON relations(user_id, relation_type)"
         )
+        await self._db.execute("""
+            CREATE VIRTUAL TABLE IF NOT EXISTS entity_fts USING fts5(
+                entity_id UNINDEXED,
+                user_id   UNINDEXED,
+                name,
+                type      UNINDEXED
+            )
+        """)
         await self._db.commit()
 
     # ── Entity CRUD ──────────────────────────────────────────────────────
+
+    @staticmethod
+    def normalize_entity_name(name: str) -> str:
+        """Normalize entity name for dedup: lowercase, strip, collapse whitespace, normalize separators."""
+        normalized = name.lower().strip()
+        normalized = normalized.replace("_", " ").replace("-", " ")
+        normalized = " ".join(normalized.split())
+        return normalized
 
     async def create_entity(
         self,
@@ -72,6 +89,11 @@ class GraphStore:
         entity_type: str = "concept",
         properties: Optional[Dict[str, Any]] = None,
     ) -> str:
+        norm = self.normalize_entity_name(name)
+        existing = await self.find_entity_by_normalized(norm, user_id)
+        if existing:
+            logger.info("Entity already exists (normalized match): %s -> %s", name, existing["name"])
+            return existing["id"]
         entity_id = str(uuid.uuid4())
         now = datetime.now(timezone.utc).isoformat()
         await self._db.execute(
@@ -79,9 +101,24 @@ class GraphStore:
                VALUES (?, ?, ?, ?, ?, ?, ?)""",
             (entity_id, user_id, name, entity_type, json.dumps(properties or {}), now, now),
         )
+        await self._db.execute(
+            "INSERT INTO entity_fts (entity_id, user_id, name, type) VALUES (?, ?, ?, ?)",
+            (entity_id, user_id, name, entity_type),
+        )
         await self._db.commit()
         logger.info("Entity created: %s (name=%s, type=%s)", entity_id[:12], name, entity_type)
         return entity_id
+
+    async def find_entity_by_normalized(self, normalized_name: str, user_id: str) -> Optional[Dict[str, Any]]:
+        cursor = await self._db.execute(
+            "SELECT * FROM entities WHERE user_id = ?",
+            (user_id,),
+        )
+        rows = await cursor.fetchall()
+        for row in rows:
+            if self.normalize_entity_name(row["name"]) == normalized_name:
+                return self._row_to_entity(row)
+        return None
 
     async def get_entity_by_name(self, name: str, user_id: str) -> Optional[Dict[str, Any]]:
         cursor = await self._db.execute(
@@ -110,10 +147,77 @@ class GraphStore:
         rows = await cursor.fetchall()
         return [self._row_to_entity(r) for r in rows]
 
+    async def search_entities_fts(self, query: str, user_id: str, limit: int = 10) -> List[Dict[str, Any]]:
+        cleaned = " ".join(re.findall(r"[\w\s]", query)).strip()
+        if not cleaned:
+            return []
+        cursor = await self._db.execute(
+            "SELECT entity_id, name, type, rank FROM entity_fts WHERE user_id = ? AND name MATCH ? ORDER BY rank ASC LIMIT ?",
+            (user_id, cleaned, limit),
+        )
+        rows = await cursor.fetchall()
+        results = []
+        for row in rows:
+            entity = await self.get_entity_by_id(row["entity_id"])
+            if entity:
+                results.append(entity)
+        return results
+
+    async def merge_entities(self, source_name: str, target_name: str, user_id: str) -> Dict[str, Any]:
+        """Merge source entity into target entity. All relations from source are re-pointed to target."""
+        source = await self.get_entity_by_name(source_name, user_id)
+        target = await self.get_entity_by_name(target_name, user_id)
+        if not source:
+            return {"success": False, "error": f"Source entity '{source_name}' not found"}
+        if not target:
+            return {"success": False, "error": f"Target entity '{target_name}' not found"}
+        if source["id"] == target["id"]:
+            return {"success": False, "error": "Source and target entities are the same"}
+
+        now = datetime.now(timezone.utc).isoformat()
+        source_id = source["id"]
+        target_id = target["id"]
+
+        await self._db.execute("BEGIN")
+        try:
+            cursor = await self._db.execute(
+                "UPDATE relations SET source_id = ?, updated_at = ? WHERE source_id = ?",
+                (target_id, now, source_id),
+            )
+            out_count = cursor.rowcount
+            cursor = await self._db.execute(
+                "UPDATE relations SET target_id = ?, updated_at = ? WHERE target_id = ?",
+                (target_id, now, source_id),
+            )
+            in_count = cursor.rowcount
+            await self._db.execute("DELETE FROM entity_fts WHERE entity_id = ?", (source_id,))
+            await self._db.execute(
+                "DELETE FROM entities WHERE id = ?", (source_id,),
+            )
+            await self._db.commit()
+        except Exception:
+            await self._db.rollback()
+            raise
+
+        logger.info(
+            "Merged entity '%s' -> '%s': %d outgoing, %d incoming relations migrated",
+            source_name, target_name, out_count, in_count,
+        )
+        return {
+            "success": True,
+            "target": target_name,
+            "source": source_name,
+            "relations_migrated": out_count + in_count,
+        }
+
     async def delete_entity(self, entity_id: str, user_id: str) -> bool:
         cursor = await self._db.execute(
             "DELETE FROM entities WHERE id = ? AND user_id = ?",
             (entity_id, user_id),
+        )
+        await self._db.execute(
+            "DELETE FROM entity_fts WHERE entity_id = ?",
+            (entity_id,),
         )
         await self._db.commit()
         deleted = cursor.rowcount > 0

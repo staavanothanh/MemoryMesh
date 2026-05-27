@@ -181,6 +181,7 @@ class TestToolInputModelsMapping:
         "create_entity", "create_relation", "query_graph", "trace_entity",
         "recall_raw",
         "learn_session",
+        "merge_entities",
     }
 
     def test_all_tools_have_models(self):

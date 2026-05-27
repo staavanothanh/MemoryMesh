@@ -21,9 +21,11 @@ class RouterConfig:
 class SqliteVecConfig:
     db_path: str = "./db/memory.db"
     auto_migrate: bool = False
+    max_concurrent_writes: int = 3
 
     def validate(self):
         os.makedirs(os.path.dirname(self.db_path) or ".", exist_ok=True)
+        assert 1 <= self.max_concurrent_writes <= 10, "max_concurrent_writes must be 1–10"
 
 
 # Deprecated — kept for migration script only
@@ -78,10 +80,28 @@ class InstinctConfig:
     db_path: str = "./db/instincts.db"
     enabled: bool = True
     min_samples: int = 5
+    v2_max_instincts: int = 200
+    max_pattern_length: int = 200
+    confidence_floor: float = 0.1
+    dedup_similarity_threshold: float = 0.95
 
     def validate(self):
         import os
         os.makedirs(os.path.dirname(self.db_path) or ".", exist_ok=True)
+        assert 1 <= self.v2_max_instincts <= 10000, "v2_max_instincts must be 1–10000"
+        assert self.max_pattern_length >= 10, "max_pattern_length must be >= 10"
+        assert 0.0 <= self.confidence_floor <= 1.0, "confidence_floor must be 0.0–1.0"
+        assert 0.5 <= self.dedup_similarity_threshold <= 1.0, "dedup_similarity_threshold must be 0.5–1.0"
+
+
+@dataclass
+class EccIntegrationConfig:
+    choke_point_enabled: bool = True
+    auto_save_tool_context: bool = True
+    bootstrap_snapshots: bool = True
+
+    def validate(self):
+        pass
 
 
 @dataclass
@@ -104,6 +124,7 @@ class AppConfig:
     consolidation: ConsolidationConfig
     embedding: EmbeddingConfig = field(default_factory=EmbeddingConfig)
     instinct: InstinctConfig = field(default_factory=InstinctConfig)
+    ecc_integration: EccIntegrationConfig = field(default_factory=EccIntegrationConfig)
     level_weight_session: float = 2.0
     level_weight_user: float = 1.5
     level_weight_knowledge: float = 1.0
@@ -136,6 +157,7 @@ class AppConfig:
             sqlite_vec=SqliteVecConfig(
                 db_path=os.getenv("VEC_DB_PATH", "./db/memory.db"),
                 auto_migrate=os.getenv("VEC_AUTO_MIGRATE", "false").lower() == "true",
+                max_concurrent_writes=int(os.getenv("VEC_MAX_CONCURRENT_WRITES", "3")),
             ),
             session=SessionConfig(
                 db_path=os.getenv("SESSION_DB_PATH", "./db/sessions.db"),
@@ -160,6 +182,15 @@ class AppConfig:
                 db_path=os.getenv("INSTINCT_DB_PATH", "./db/instincts.db"),
                 enabled=os.getenv("INSTINCT_ENABLED", "true").lower() == "true",
                 min_samples=int(os.getenv("INSTINCT_MIN_SAMPLES", "5")),
+                v2_max_instincts=int(os.getenv("INSTINCT_V2_MAX", "200")),
+                max_pattern_length=int(os.getenv("INSTINCT_MAX_PATTERN_LENGTH", "200")),
+                confidence_floor=float(os.getenv("INSTINCT_CONFIDENCE_FLOOR", "0.1")),
+                dedup_similarity_threshold=float(os.getenv("INSTINCT_DEDUP_SIMILARITY", "0.95")),
+            ),
+            ecc_integration=EccIntegrationConfig(
+                choke_point_enabled=os.getenv("ECC_CHOKE_POINT_ENABLED", "true").lower() == "true",
+                auto_save_tool_context=os.getenv("ECC_AUTO_SAVE_TOOL_CONTEXT", "true").lower() == "true",
+                bootstrap_snapshots=os.getenv("ECC_BOOTSTRAP_SNAPSHOTS", "true").lower() == "true",
             ),
             consolidation=ConsolidationConfig(
                 similarity_threshold=float(os.getenv("CONSOLIDATION_SIMILARITY", "0.85")),
@@ -197,3 +228,4 @@ class AppConfig:
         self.session.validate()
         self.consolidation.validate()
         self.instinct.validate()
+        self.ecc_integration.validate()

@@ -11,6 +11,7 @@ from collections import Counter
 from typing import Dict, List, Optional, NamedTuple
 
 from .instinct_store import InstinctStore
+from ..config import InstinctConfig
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +24,16 @@ class CompiledInstinct(NamedTuple):
     confidence: float
 
 
+# ReDoS: catastrophic backtracking patterns (nested quantifiers, overlapping groups)
+_CATASTROPHIC_PATTERNS = re.compile(
+    r"\(.+\)\+"        # (something)+ — nested group with quantifier
+    r"|\(\?.+\)\+"      # (?...) non-capturing group with quantifier
+    r"|\+.+"            # quantified after quantifier
+    r"|\*\+"            # star followed by plus
+    r"|\([^)]+\)\*"     # group with star
+)
+
+
 class InstinctManager:
     """In-memory cache of regex-based instincts, grouped by project_id.
 
@@ -30,9 +41,32 @@ class InstinctManager:
     per project via dict lookup + compiled regex search (microsecond-level).
     """
 
-    def __init__(self, store: InstinctStore):
+    def __init__(self, store: InstinctStore, config: Optional[InstinctConfig] = None):
         self._store = store
+        self._config = config or InstinctConfig()
         self._cache: Dict[str, List[CompiledInstinct]] = {}
+
+    @staticmethod
+    def is_safe_regex(pattern: str, max_length: int = 200) -> bool:
+        """ReDoS guard: reject patterns that are too long or have catastrophic backtracking."""
+        if len(pattern) > max_length:
+            logger.debug("ReDoS guard: pattern too long (%d > %d)", len(pattern), max_length)
+            return False
+        if _CATASTROPHIC_PATTERNS.search(pattern):
+            logger.debug("ReDoS guard: catastrophic pattern detected: %s", pattern[:80])
+            return False
+        return True
+
+    @staticmethod
+    def _dedup_instincts(records: List[Dict], similarity_threshold: float = 0.95) -> List[Dict]:
+        """Dedup instincts with the same trigger_regex (keep highest confidence)."""
+        seen: Dict[str, Dict] = {}
+        for row in records:
+            key = row["trigger_regex"].strip().lower()
+            existing = seen.get(key)
+            if existing is None or row.get("confidence_score", 0) > existing.get("confidence_score", 0):
+                seen[key] = row
+        return list(seen.values())
 
     async def load_all(self):
         """Load all instincts from DB into RAM cache, pre-compiling regex."""
@@ -40,8 +74,11 @@ class InstinctManager:
         project_ids = await self._store.get_all_projects_v2()
         for pid in project_ids:
             records = await self._store.get_instincts_v2(pid)
+            records = self._dedup_instincts(records, self._config.dedup_similarity_threshold)
             compiled = []
             for row in records:
+                if not self.is_safe_regex(row["trigger_regex"], self._config.max_pattern_length):
+                    continue
                 try:
                     pattern = re.compile(row["trigger_regex"], re.IGNORECASE)
                     compiled.append(CompiledInstinct(
@@ -60,8 +97,11 @@ class InstinctManager:
     async def load_project(self, project_id: str):
         """Hot-reload a specific project's instincts into RAM."""
         records = await self._store.get_instincts_v2(project_id)
+        records = self._dedup_instincts(records, self._config.dedup_similarity_threshold)
         compiled = []
         for row in records:
+            if not self.is_safe_regex(row["trigger_regex"], self._config.max_pattern_length):
+                continue
             try:
                 pattern = re.compile(row["trigger_regex"], re.IGNORECASE)
                 compiled.append(CompiledInstinct(
@@ -83,14 +123,16 @@ class InstinctManager:
         """Match context_text against all compiled instincts for a project.
 
         Returns list of reaction strings for matching instincts, ordered by
-        confidence_score descending. O(1) lookup + O(N) matching where N is
-        the number of instincts for this project (typically < 50).
+        confidence_score descending. Applies confidence_floor filter.
+        O(1) lookup + O(N) matching where N is the number of instincts.
         """
         instincts = self._cache.get(project_id, [])
         if not instincts:
             return []
         matched = []
         for inst in instincts:
+            if inst.confidence < self._config.confidence_floor:
+                continue
             if inst.regex.search(context_text):
                 matched.append(inst.reaction)
         return matched
@@ -142,23 +184,30 @@ async def background_learning_daemon(
     """Background task: extract N-gram patterns and store + hot-reload.
 
     Runs N-gram extraction in a thread pool to avoid blocking the event loop.
+    Applies ReDoS guard and cap enforcement before inserting each instinct.
     """
     try:
         new_instincts = await asyncio.to_thread(
             InstinctManager.extract_ngrams, tool_sequences, 2
         )
+        added = 0
         for inst in new_instincts:
-            await store.add_instinct_v2(
+            if not manager.is_safe_regex(inst["trigger_regex"], manager._config.max_pattern_length):
+                logger.debug("Background learning: skipping unsafe regex for %s", project_id)
+                continue
+            result = await store.add_instinct_v2(
                 project_id=project_id,
                 trigger_regex=inst["trigger_regex"],
                 reaction=inst["reaction"],
                 confidence_score=inst["confidence_score"],
             )
-        if new_instincts:
+            if result is not None:
+                added += 1
+        if added:
             await manager.load_project(project_id)
             logger.info(
                 "Background learning: added %d new instincts for %s",
-                len(new_instincts), project_id,
+                added, project_id,
             )
     except Exception as e:
         logger.error("Background learning daemon failed: %s", e, exc_info=True)

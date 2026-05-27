@@ -9,8 +9,9 @@ class ConversationTracker:
         "list_sessions", "get_session_context",
     })
 
-    def __init__(self, session_id: str):
+    def __init__(self, session_id: str, choke_point_enabled: bool = True):
         self.session_id = session_id
+        self.choke_point_enabled = choke_point_enabled
         self._uncommitted_actions: int = 0
         self._hostage_data: Optional[Any] = None
         self._tool_footprints: list[str] = []
@@ -36,6 +37,8 @@ class ConversationTracker:
         self._tool_footprints.clear()
 
     def engage_choke_point(self, data_to_hold: Any) -> str:
+        if not self.choke_point_enabled:
+            return ""
         self._hostage_data = data_to_hold
         return (
             "🛑 CHOKE-POINT ENGAGED: Your working memory is overloaded "
