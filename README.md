@@ -148,6 +148,7 @@ src/memorymesh/
 ## 💡 The Story Behind MemoryMesh
 
 MemoryMesh was born from a common frustration: AI agents often lack true long-term memory across sessions, leading to context loss and fragmented workflows. I set out to build a lightweight, local-first MCP server that solves this without sacrificing speed or privacy. MemoryMesh is designed to be lean and easy to use, while providing sophisticated capabilities: rapid context retrieval, precise control over model behavior, autonomous learning from user interactions, and persistent, reliable context that ensures AI agents retain what matters.
+
 ---
 ## 🚀 Quick Start & Installation
 ### Prerequisites
