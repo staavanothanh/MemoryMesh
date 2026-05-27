@@ -4,8 +4,7 @@
 
 <div align="center">
   <h1>🧠 MemoryMesh</h1>
-  <p><strong>The only MCP Memory Server with Behavioral Learning + Action Control</strong><br>
-  <em>(Máy chủ MCP bộ nhớ duy nhất có Behavioral Learning + Action Control)</em></p>
+  <p><strong>Một máy chủ bộ nhớ MCP chạy cục bộ, nhẹ, hỗ trợ ngữ cảnh dài hạn cho AI agent, học tập hành vi và kiểm soát hành động chính xác.</strong></p>
   <p>
     <img src="https://img.shields.io/badge/MCP-Compliant-brightgreen?style=for-the-badge&logo=quickpass" alt="MCP Compliant">
     <img src="https://img.shields.io/badge/Python-3.12+-blue?style=for-the-badge&logo=python" alt="Python Version">
@@ -146,11 +145,7 @@ tests/                   326+ tests (pytest, asyncio_mode=auto)
 
 ## 💡 Câu chuyện đằng sau
 
-Tôi đã thử mọi MCP memory server. Anthropic Official — chỉ 9 tools, không semantic search, không behavioral learning. Mem0 — mạnh nhưng cần Qdrant và graph features sau $249/tháng. Zep temporal graph — cần Neo4j.
-
-Tôi muốn: **Zero hạ tầng** (pip install + SQLite) • **Học tập hành vi** (agent tự học cách tôi làm việc) • **Kiểm soát hành động** (chứng minh tiến độ trước khi recall) • **Không mất context** (lưu nguyên văn, không nén LLM) • **24 tools** (CRUD đầy đủ).
-
-MemoryMesh là kết quả. Xây dựng từ đầu, 0→v0.5.0, 326 tests, MIT license. Miễn phí mãi mãi. — Shinn
+MemoryMesh ra đời từ một nỗi trăn trở chung: các AI agent thường thiếu khả năng ghi nhớ dài hạn thực sự giữa các phiên làm việc, dẫn đến việc mất ngữ cảnh và các quy trình làm việc bị đứt đoạn. Tôi quyết định xây dựng một máy chủ MCP chạy cục bộ, nhẹ, giải quyết vấn đề này mà không đánh đổi tốc độ hay sự riêng tư. MemoryMesh được thiết kế tối giản, dễ sử dụng, nhưng vẫn cung cấp các khả năng tiên tiến: truy xuất ngữ cảnh nhanh chóng, kiểm soát hành vi của model, tự học hỏi từ các tương tác của người dùng, và duy trì ngữ cảnh nhất quán, đảm bảo AI agent luôn nắm giữ những thông tin quan trọng.
 
 ---
 

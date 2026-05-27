@@ -1,9 +1,10 @@
+<div align="right">
+  <a href="README.md">🇺🇸 English</a> | <strong>🇻🇳 Tiếng Việt</strong>
+</div>
+
 <div align="center">
   <h1>🧠 MemoryMesh</h1>
-  <p><strong>The only MCP Memory Server with Behavioral Learning + Action Control</strong></p>
-  <p>
-    <a href="README.vi.md">🇻🇳 Tiếng Việt</a>
-  </p>
+  <p><strong>A lightweight, local-first MCP memory server for long-term AI agent context, behavioral learning, and precise action control.</strong></p>
   <p>
     <a href="https://github.com/features/actions"><img src="https://img.shields.io/badge/MCP-Compliant-brightgreen?style=for-the-badge&logo=quickpass" alt="MCP Compliant"></a>
     <img src="https://img.shields.io/badge/Python-3.12+-blue?style=for-the-badge&logo=python" alt="Python Version">
@@ -70,11 +71,17 @@ No context lost. No re-explaining. No cloud.
 ## ✨ Why MemoryMesh?
 These features are unique to MemoryMesh — no other MCP memory server has them.
 **🧠 Instinct v2 (Behavioral Learning)** — N-gram pattern extraction, O(1) RAM-cached regex, auto-tagging at confidence > 0.8, reinforcement scoring.
+
 **⛓️ Action Choke Point** — Blocks `recall` after 5 uncommitted actions until `commit_milestone`. Hostage data cached, released instantly. Prevents context overflow.
+
 **🔍 3-Tier Hybrid Search** — Vector ANN (sqlite-vec) → FTS5 keyword → chronological fallback. Level-weighted scoring with workspace-aware soft penalty.
+
 **📜 Lossless Raw History** — Verbatim tool call logging with zlib compression. Queryable via `recall_raw` (filter by tool, success/error). No LLM summarization loss.
+
 **🕸️ Multi-hop GraphRAG** — Recursive CTE graph traversal. Entities, relations, cycle detection. Safe for Plan/Read-Only. Export as XML triplets.
+
 **📄 Dynamic Context Management** — Keyset cursor pagination (stateless). Scoring via SQLite CTEs (importance × level weight × recency decay). Multi-threaded token counting.
+
 **🧩 Flexible Embedding** — `pip install memorymesh` (~50MB, no PyTorch). Optional `[local]` for SentenceTransformer offline. Remote API supported.
 ---
 ## 🏗 System Architecture
@@ -139,13 +146,8 @@ src/memorymesh/
 ```
 ---
 ## 💡 The Story Behind MemoryMesh
-I tried every MCP memory server. Anthropic's official is a great start — but 9 tools, no semantic search, no behavioral learning. Mem0 requires Qdrant and locks graphs behind $249/month. Zep's temporal graph needs Neo4j. I wanted something different.
-- **Zero infra**: One `pip install`, one SQLite file, no Docker, no cloud
-- **Behavioral learning**: The agent learns how I work, not just stores facts
-- **Action control**: Agent proves progress before recalling more context
-- **No context lost**: Every tool call preserved verbatim, not LLM-summarized
-- **24 tools**: Full CRUD on memories, sessions, entities, relationships, instincts
-MemoryMesh is the result. Built from scratch, 0→v0.5.0, 326 tests. MIT licensed. Free forever.
+
+MemoryMesh was born from a common frustration: AI agents often lack true long-term memory across sessions, leading to context loss and fragmented workflows. I set out to build a lightweight, local-first MCP server that solves this without sacrificing speed or privacy. MemoryMesh is designed to be lean and easy to use, while providing sophisticated capabilities: rapid context retrieval, precise control over model behavior, autonomous learning from user interactions, and persistent, reliable context that ensures AI agents retain what matters.
 ---
 ## 🚀 Quick Start & Installation
 ### Prerequisites
