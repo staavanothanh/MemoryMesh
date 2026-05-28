@@ -115,6 +115,7 @@ class TestGetBootstrapScaffold:
                               ],
                               "semantic",
                               {},
+                              None,
                           ))):
             scaffold = await tool_handlers._get_bootstrap_scaffold(
                 "test_user", "/project",
@@ -134,6 +135,7 @@ class TestGetBootstrapScaffold:
                               ],
                               "semantic",
                               {},
+                              None,
                           ))):
             scaffold = await tool_handlers._get_bootstrap_scaffold(
                 "test_user", "/project",
@@ -153,6 +155,7 @@ class TestGetBootstrapScaffold:
                               ],
                               "semantic",
                               {},
+                              None,
                           ))):
             scaffold = await tool_handlers._get_bootstrap_scaffold(
                 "test_user", "/project",
@@ -163,7 +166,7 @@ class TestGetBootstrapScaffold:
     @pytest.mark.asyncio
     async def test_empty_results_returns_none(self, tool_handlers):
         with patch.object(tool_handlers.manager, "search_with_fallback",
-                          new=AsyncMock(return_value=([], "semantic", {}))):
+                          new=AsyncMock(return_value=([], "semantic", {}, None))):
             scaffold = await tool_handlers._get_bootstrap_scaffold(
                 "test_user", "/project",
             )
@@ -177,6 +180,7 @@ class TestGetBootstrapScaffold:
                                 "tags": ["bootstrap"], "score": 0.9}],
                               "semantic",
                               {},
+                              None,
                           ))):
             scaffold = await tool_handlers._get_bootstrap_scaffold(
                 "test_user", "/project",

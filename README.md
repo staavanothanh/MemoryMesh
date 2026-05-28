@@ -10,8 +10,8 @@
     <img src="https://img.shields.io/badge/Python-3.12+-blue?style=for-the-badge&logo=python" alt="Python Version">
     <img src="https://img.shields.io/badge/Database-SQLite--vec-orange?style=for-the-badge&logo=sqlite" alt="Database">
     <img src="https://img.shields.io/badge/License-MIT-yellow?style=for-the-badge" alt="License">
-    <img src="https://img.shields.io/badge/Version-0.5.0-purple?style=for-the-badge" alt="Version 0.5.0">
-    <img src="https://img.shields.io/badge/Tests-326%20passed-brightgreen?style=for-the-badge" alt="Tests">
+    <img src="https://img.shields.io/badge/Version-0.6.0-purple?style=for-the-badge" alt="Version 0.6.0">
+    <img src="https://img.shields.io/badge/Tests-579%20passed-brightgreen?style=for-the-badge" alt="Tests">
   </p>
 </div>
 MemoryMesh is a high-performance, **local-first persistent memory MCP server** designed to give your AI agents long-term context, multi-hop reasoning, and behavioral learning — without Docker, without cloud databases, without external services.
@@ -174,6 +174,12 @@ pip install "memorymesh[test,local,cli]"
 
 > 💡 Combine extras as needed: `pip install "memorymesh[local,cli]"` installs everything.
 
+**E. Docker (Zero Embeddings)**
+```bash
+docker compose -f docker/docker-compose.yml up --build
+```
+No PyTorch, no sentence-transformers. Uses `EMBEDDING_MODE=none`. Ideal for containerized deployments.
+
 ### 2. Initialize the Workspace
 ```bash
 python -m memorymesh init
@@ -188,7 +194,7 @@ Edit the generated `.env` file in your workspace:
 | `ROUTER_URL` | `http://127.0.0.1:20128/v1` | Your LLM endpoint URL. |
 | `DEFAULT_MODEL` | `your-model` | Primary model for summarization. |
 | `BACKGROUND_MODEL_POOL` | *(Empty)* | Comma-separated cheap models for background fact extraction. |
-| `EMBEDDING_MODE` | `local` | Set to `remote` to use an API for embeddings. |
+| `EMBEDDING_MODE` | `local` | `local` (sentence-transformers), `remote` (API), or `none` (zero-dependency, Docker). |
 | `EMBEDDING_MODEL` | `paraphrase-multilingual...` | Local embedding model name. |
 | `REMOTE_EMBEDDING_API_URL` | *(Empty)* | Endpoint for remote embeddings. |
 | `REMOTE_EMBEDDING_API_KEY` | *(Empty)* | API Key for the remote embedding server. |
@@ -219,6 +225,8 @@ memorymesh sessions --limit 20
 memorymesh stats
 # Initialize a new workspace
 memorymesh init
+# Run as SSE HTTP server (for Docker or remote access)
+memorymesh serve
 ```
 ---
 ## 🛠 Development & Testing
@@ -226,7 +234,7 @@ Using the provided `Makefile` makes development a breeze:
 ```bash
 # Install everything for dev
 make install-all
-# Run tests (326 robust tests covering all features)
+# Run tests (579 robust tests covering all features)
 make test
 make test-unit
 make test-int
@@ -246,7 +254,7 @@ We welcome contributions! Here's how to get started:
 1. Fork the repo
 2. Run `make install-all` for dev setup
 3. Make your changes
-4. Run `make test` (326 tests should pass)
+4. Run `make test` (579 tests should pass)
 5. Submit a PR
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for detailed guidelines (coming soon).

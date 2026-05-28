@@ -53,7 +53,21 @@ class ToolOutput(TypedDict, total=False):
 
 # ── MCP Tool Input Models ───────────────────────────────────────────────
 
-class RememberInput(BaseModel):
+class BaseToolInput(BaseModel, extra="forbid"):
+    """Base class for all MCP tool inputs — ensures user_id is never silently dropped."""
+    user_id: str = Field(default="", description="User ID (defaults to configured user)")
+
+
+class RecallCursor(BaseModel):
+    """Cursor for paginated recall — encodes search state for consistent pagination."""
+    query_hash: str = Field(..., description="sha256 of query[:16] for cursor validation")
+    tier: str = Field(..., pattern=r"^(semantic|fts_keyword|chronological)$")
+    last_score: float = Field(..., ge=0.0, le=1.0)
+    last_id: str = Field(..., min_length=1)
+    page: int = Field(default=1, ge=1)
+
+
+class RememberInput(BaseToolInput):
     """Input for the remember tool — save a memory."""
     content: str = Field(..., min_length=1, description="Content to remember")
     tags: List[str] = Field(default_factory=list, description="List of tags (optional)")
@@ -72,7 +86,7 @@ class RememberInput(BaseModel):
         return v
 
 
-class RecallInput(BaseModel):
+class RecallInput(BaseToolInput):
     """Input for the recall tool — search memories."""
     query: str = Field(..., min_length=1, description="Query string to find memories")
     top_k: int = Field(default=5, ge=1, le=20, description="Maximum number of results")
@@ -91,87 +105,87 @@ class RecallInput(BaseModel):
         return v
 
 
-class ForgetInput(BaseModel):
+class ForgetInput(BaseToolInput):
     """Input for the forget tool — soft-delete a memory."""
     memory_id: str = Field(..., min_length=1, description="ID of the memory to delete")
 
 
-class ArchiveMemoryInput(BaseModel):
+class ArchiveMemoryInput(BaseToolInput):
     """Input for the archive_memory tool."""
     memory_id: str = Field(..., min_length=1, description="ID of the memory to archive")
 
 
-class UnarchiveMemoryInput(BaseModel):
+class UnarchiveMemoryInput(BaseToolInput):
     """Input for the unarchive_memory tool."""
     memory_id: str = Field(..., min_length=1, description="ID of the memory to unarchive")
 
 
-class ListMemoriesInput(BaseModel):
+class ListMemoriesInput(BaseToolInput):
     """Input for the list_memories tool — paginated listing."""
     limit: int = Field(default=100, ge=1, le=1000, description="Number of results")
     offset: int = Field(default=0, ge=0, description="Starting position")
 
 
-class PingInput(BaseModel):
+class PingInput(BaseToolInput):
     """Input for the ping tool — health check (no required fields)."""
 
 
-class SaveSystemPromptInput(BaseModel):
+class SaveSystemPromptInput(BaseToolInput):
     """Input for the save_system_prompt tool."""
     system_prompt: str = Field(..., min_length=1, description="System prompt to save")
 
 
-class CommitMilestoneInput(BaseModel):
+class CommitMilestoneInput(BaseToolInput):
     """Input for the commit_milestone tool."""
     summary: str = Field(..., min_length=1, description="Brief summary of what was accomplished")
     tasks_done: str = Field(default="", description="Files changed, bugs fixed, or features completed")
     next_steps: str = Field(default="", description="Planned next steps")
 
 
-class SaveContextPairInput(BaseModel):
+class SaveContextPairInput(BaseToolInput):
     """Input for the save_context_pair tool (deprecated)."""
     user_message: str = Field(..., min_length=1, description="User's message")
     assistant_message: str = Field(default="", description="Assistant's response")
 
 
-class ListSessionsInput(BaseModel):
+class ListSessionsInput(BaseToolInput):
     """Input for the list_sessions tool."""
     limit: int = Field(default=10, ge=1, le=100, description="Number of results")
 
 
-class GetSessionContextInput(BaseModel):
+class GetSessionContextInput(BaseToolInput):
     """Input for the get_session_context tool."""
     session_id: str = Field(..., min_length=1, description="ID of the session to view")
     limit: int = Field(default=50, ge=1, le=500, description="Maximum context lines")
 
 
-class NewSessionInput(BaseModel):
+class NewSessionInput(BaseToolInput):
     """Input for the new_session tool."""
     system_prompt: str = Field(default="", description="System prompt for the new session")
     workspace_path: str = Field(default="", description="Workspace path")
 
 
-class EndSessionInput(BaseModel):
+class EndSessionInput(BaseToolInput):
     """Input for the end_session tool."""
     session_id: str = Field(default="", description="Session ID to end (default current)")
 
 
-class SaveWorkspaceContextInput(BaseModel):
+class SaveWorkspaceContextInput(BaseToolInput):
     """Input for the save_workspace_context tool."""
     workspace_path: str = Field(default="", description="Workspace path for snapshot")
 
 
-class DeleteSessionInput(BaseModel):
+class DeleteSessionInput(BaseToolInput):
     """Input for the delete_session tool."""
     session_id: str = Field(default="", description="Session ID to delete")
 
 
-class PreserveSessionMemoriesInput(BaseModel):
+class PreserveSessionMemoriesInput(BaseToolInput):
     """Input for the preserve_session_memories tool."""
     session_id: str = Field(default="", description="Session ID to scan")
 
 
-class ResumeSessionInput(BaseModel):
+class ResumeSessionInput(BaseToolInput):
     """Input for the resume_session tool."""
     session_id: str = Field(..., min_length=1, description="Session ID to restore")
     top_k: int = Field(default=10, ge=1, le=50, description="Number of memories to recall")
@@ -183,7 +197,7 @@ _KNOWN_ENTITY_TYPES = frozenset({
     "concept", "project", "module", "bug", "person", "tool", "file", "function", "class",
 })
 
-class CreateEntityInput(BaseModel):
+class CreateEntityInput(BaseToolInput):
     """Input for the create_entity tool — a cognitive operation that records a concept/entity into the Knowledge Graph.
     Safe for Read-Only/Plan Mode: this operation does NOT modify the file system or execute external commands.
     It only records the model's own reasoning and conclusions for future recall via the Knowledge Graph.
@@ -215,7 +229,7 @@ _KNOWN_RELATION_TYPES = frozenset({
     "RELATES_TO", "EXTENDS", "CONTAINS", "CALLS", "CREATES",
 })
 
-class CreateRelationInput(BaseModel):
+class CreateRelationInput(BaseToolInput):
     """Input for the create_relation tool — a cognitive operation that links two entities in the Knowledge Graph.
     Safe for Read-Only/Plan Mode: this operation does NOT modify the file system or execute external commands.
     It only records the model's own reasoning about how concepts relate to each other.
@@ -233,14 +247,14 @@ class CreateRelationInput(BaseModel):
             raise ValueError(f"Unknown relation_type: {v}. Must be one of {sorted(_KNOWN_RELATION_TYPES)}")
         return v
 
-class QueryGraphInput(BaseModel):
+class QueryGraphInput(BaseToolInput):
     """Input for the query_graph tool — find 1-hop neighbors of an entity in the Knowledge Graph."""
     entity_name: str = Field(..., min_length=1, description="Name of the entity to query")
     limit: int = Field(default=20, ge=1, le=50, description="Maximum number of relations to return")
     workspace_path: str = Field(default="", description="Workspace path to limit scope")
 
 
-class TraceEntityInput(BaseModel):
+class TraceEntityInput(BaseToolInput):
     """Input for the trace_entity tool — traverse multi-hop paths from an entity in the Knowledge Graph."""
     entity_name: str = Field(..., min_length=1, description="Name of the entity to start tracing from")
     max_depth: int = Field(default=3, ge=1, le=5, description="Maximum traversal depth")
@@ -248,7 +262,7 @@ class TraceEntityInput(BaseModel):
     workspace_path: str = Field(default="", description="Workspace path to limit scope")
 
 
-class RecallRawInput(BaseModel):
+class RecallRawInput(BaseToolInput):
     """Input for the recall_raw tool — query raw tool call history."""
     session_id: str = Field(default="", description="Session ID (default current session)")
     limit: int = Field(default=50, ge=1, le=500, description="Maximum number of entries")
@@ -256,11 +270,11 @@ class RecallRawInput(BaseModel):
     tool_name: str = Field(default="", description="Filter by tool name")
     status: Optional[Literal["success", "error"]] = Field(default=None, description="Filter by status (omit for no filter)")
 
-class LearnSessionInput(BaseModel):
+class LearnSessionInput(BaseToolInput):
     """Input for the learn_session tool — analyze a session and extract behavioral patterns."""
     session_id: str = Field(default="", description="Session ID to learn from (default current)")
 
-class MergeEntitiesInput(BaseModel):
+class MergeEntitiesInput(BaseToolInput):
     """Input for the merge_entities tool — merge two knowledge graph entities."""
     source: str = Field(..., min_length=1, max_length=200, description="Name of the source entity (will be merged into target)")
     target: str = Field(..., min_length=1, max_length=200, description="Name of the target entity (will absorb source)")

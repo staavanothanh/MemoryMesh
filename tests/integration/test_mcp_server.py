@@ -126,7 +126,7 @@ async def test_handle_new_session(handlers, session_store):
     assert session["status"] == "active"
 
     session_id2 = result["data"]["session_id"]
-    assert handlers._current_session_id == session_id2
+    assert await handlers.get_current_session_id() == session_id2
 
 
 @pytest.mark.asyncio
@@ -143,7 +143,7 @@ async def test_handle_new_session_auto_ends_previous(handlers, session_store):
     second_session = await session_store.get_session(second_id)
     assert second_session["status"] == "active"
 
-    assert handlers._current_session_id == second_id
+    assert await handlers.get_current_session_id() == second_id
 
 
 @pytest.mark.asyncio
@@ -157,7 +157,7 @@ async def test_handle_end_session(handlers, session_store):
 
     session = await session_store.get_session(session_id)
     assert session["status"] == "ended"
-    assert handlers._current_session_id == ""
+    assert await handlers.get_current_session_id() == ""
 
 
 @pytest.mark.asyncio
@@ -182,7 +182,7 @@ async def test_handle_save_workspace_context(handlers, session_store):
     assert "files" in result["data"]["snapshot"]
     assert "dependencies" in result["data"]["snapshot"]
 
-    snapshots = await session_store.get_workspace_snapshots(handlers._current_session_id)
+    snapshots = await session_store.get_workspace_snapshots(await handlers.get_current_session_id())
     assert len(snapshots) >= 1
 
 
@@ -265,7 +265,7 @@ class TestConversationTrackerIntegration:
     @pytest.mark.asyncio
     async def test_note_tool_call_also_records_tracker(self, handlers):
         await handlers.set_session("test_session_4")
-        sid = handlers._current_session_id
+        sid = await handlers.get_current_session_id()
         await handlers._note_tool_call("remember", {"content": "via _note_tool_call"})
         tracker = await handlers._get_tracker(sid)
         assert "[remember:via _note_tool_call]" in tracker._tool_footprints

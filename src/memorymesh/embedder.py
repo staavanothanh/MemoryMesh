@@ -46,6 +46,15 @@ async def prewarm_embedder(model_name: str):
         await init_embedder(cfg)
 
 
+async def get_embedding_dimension() -> int:
+    """Return the embedding dimension of the current provider."""
+    global _provider
+    if _provider is None:
+        cfg = EmbeddingConfig(mode="local", model="paraphrase-multilingual-MiniLM-L12-v2")
+        await init_embedder(cfg)
+    return await _provider.get_dimension()
+
+
 async def close_embedder():
     global _provider
     if _provider:

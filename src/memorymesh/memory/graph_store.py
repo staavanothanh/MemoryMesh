@@ -14,63 +14,66 @@ MAX_RELATIONS_PER_QUERY = 20
 
 
 class GraphStore:
-    def __init__(self, db: aiosqlite.Connection):
+    def __init__(self, db: aiosqlite.Connection, write_lock: asyncio.Lock):
         self._db = db
+        self._write_lock = write_lock
 
     async def create_schema(self):
-        await self._db.execute("""
-            CREATE TABLE IF NOT EXISTS entities (
-                id         TEXT PRIMARY KEY,
-                user_id    TEXT NOT NULL,
-                name       TEXT NOT NULL,
-                type       TEXT NOT NULL DEFAULT 'concept',
-                properties TEXT NOT NULL DEFAULT '{}',
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            )
-        """)
-        await self._db.execute(
-            "CREATE INDEX IF NOT EXISTS idx_entities_user ON entities(user_id)"
-        )
-        await self._db.execute(
-            "CREATE INDEX IF NOT EXISTS idx_entities_name ON entities(user_id, name)"
-        )
-        await self._db.execute("""
-            CREATE TABLE IF NOT EXISTS relations (
-                id            TEXT PRIMARY KEY,
-                user_id       TEXT NOT NULL,
-                source_id     TEXT NOT NULL,
-                target_id     TEXT NOT NULL,
-                relation_type TEXT NOT NULL,
-                weight        REAL NOT NULL DEFAULT 1.0,
-                metadata      TEXT NOT NULL DEFAULT '{}',
-                created_at    TEXT NOT NULL,
-                updated_at    TEXT NOT NULL,
-                FOREIGN KEY (source_id) REFERENCES entities(id) ON DELETE CASCADE,
-                FOREIGN KEY (target_id) REFERENCES entities(id) ON DELETE CASCADE
-            )
-        """)
-        await self._db.execute(
-            "CREATE INDEX IF NOT EXISTS idx_relations_user ON relations(user_id)"
-        )
-        await self._db.execute(
-            "CREATE INDEX IF NOT EXISTS idx_relations_source ON relations(source_id)"
-        )
-        await self._db.execute(
-            "CREATE INDEX IF NOT EXISTS idx_relations_target ON relations(target_id)"
-        )
-        await self._db.execute(
-            "CREATE INDEX IF NOT EXISTS idx_relations_type ON relations(user_id, relation_type)"
-        )
-        await self._db.execute("""
-            CREATE VIRTUAL TABLE IF NOT EXISTS entity_fts USING fts5(
-                entity_id UNINDEXED,
-                user_id   UNINDEXED,
-                name,
-                type      UNINDEXED
-            )
-        """)
-        await self._db.commit()
+        from .sqlite_vec_backend import TransactionContext
+        async with self._write_lock:
+            async with TransactionContext(self._db):
+                await self._db.execute("""
+                    CREATE TABLE IF NOT EXISTS entities (
+                        id         TEXT PRIMARY KEY,
+                        user_id    TEXT NOT NULL,
+                        name       TEXT NOT NULL,
+                        type       TEXT NOT NULL DEFAULT 'concept',
+                        properties TEXT NOT NULL DEFAULT '{}',
+                        created_at TEXT NOT NULL,
+                        updated_at TEXT NOT NULL
+                    )
+                """)
+                await self._db.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_entities_user ON entities(user_id)"
+                )
+                await self._db.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_entities_name ON entities(user_id, name)"
+                )
+                await self._db.execute("""
+                    CREATE TABLE IF NOT EXISTS relations (
+                        id            TEXT PRIMARY KEY,
+                        user_id       TEXT NOT NULL,
+                        source_id     TEXT NOT NULL,
+                        target_id     TEXT NOT NULL,
+                        relation_type TEXT NOT NULL,
+                        weight        REAL NOT NULL DEFAULT 1.0,
+                        metadata      TEXT NOT NULL DEFAULT '{}',
+                        created_at    TEXT NOT NULL,
+                        updated_at    TEXT NOT NULL,
+                        FOREIGN KEY (source_id) REFERENCES entities(id) ON DELETE CASCADE,
+                        FOREIGN KEY (target_id) REFERENCES entities(id) ON DELETE CASCADE
+                    )
+                """)
+                await self._db.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_relations_user ON relations(user_id)"
+                )
+                await self._db.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_relations_source ON relations(source_id)"
+                )
+                await self._db.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_relations_target ON relations(target_id)"
+                )
+                await self._db.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_relations_type ON relations(user_id, relation_type)"
+                )
+                await self._db.execute("""
+                    CREATE VIRTUAL TABLE IF NOT EXISTS entity_fts USING fts5(
+                        entity_id UNINDEXED,
+                        user_id   UNINDEXED,
+                        name,
+                        type      UNINDEXED
+                    )
+                """)
 
     # ── Entity CRUD ──────────────────────────────────────────────────────
 
@@ -96,16 +99,18 @@ class GraphStore:
             return existing["id"]
         entity_id = str(uuid.uuid4())
         now = datetime.now(timezone.utc).isoformat()
-        await self._db.execute(
-            """INSERT INTO entities (id, user_id, name, type, properties, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
-            (entity_id, user_id, name, entity_type, json.dumps(properties or {}), now, now),
-        )
-        await self._db.execute(
-            "INSERT INTO entity_fts (entity_id, user_id, name, type) VALUES (?, ?, ?, ?)",
-            (entity_id, user_id, name, entity_type),
-        )
-        await self._db.commit()
+        from .sqlite_vec_backend import TransactionContext
+        async with self._write_lock:
+            async with TransactionContext(self._db):
+                await self._db.execute(
+                    """INSERT INTO entities (id, user_id, name, type, properties, created_at, updated_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    (entity_id, user_id, name, entity_type, json.dumps(properties or {}), now, now),
+                )
+                await self._db.execute(
+                    "INSERT INTO entity_fts (entity_id, user_id, name, type) VALUES (?, ?, ?, ?)",
+                    (entity_id, user_id, name, entity_type),
+                )
         logger.info("Entity created: %s (name=%s, type=%s)", entity_id[:12], name, entity_type)
         return entity_id
 
@@ -148,7 +153,7 @@ class GraphStore:
         return [self._row_to_entity(r) for r in rows]
 
     async def search_entities_fts(self, query: str, user_id: str, limit: int = 10) -> List[Dict[str, Any]]:
-        cleaned = " ".join(re.findall(r"[\w\s]", query)).strip()
+        cleaned = " ".join(re.findall(r"[\w\s]+", query)).strip()
         if not cleaned:
             return []
         cursor = await self._db.execute(
@@ -178,26 +183,23 @@ class GraphStore:
         source_id = source["id"]
         target_id = target["id"]
 
-        await self._db.execute("BEGIN")
-        try:
-            cursor = await self._db.execute(
-                "UPDATE relations SET source_id = ?, updated_at = ? WHERE source_id = ?",
-                (target_id, now, source_id),
-            )
-            out_count = cursor.rowcount
-            cursor = await self._db.execute(
-                "UPDATE relations SET target_id = ?, updated_at = ? WHERE target_id = ?",
-                (target_id, now, source_id),
-            )
-            in_count = cursor.rowcount
-            await self._db.execute("DELETE FROM entity_fts WHERE entity_id = ?", (source_id,))
-            await self._db.execute(
-                "DELETE FROM entities WHERE id = ?", (source_id,),
-            )
-            await self._db.commit()
-        except Exception:
-            await self._db.rollback()
-            raise
+        from .sqlite_vec_backend import TransactionContext
+        async with self._write_lock:
+            async with TransactionContext(self._db):
+                cursor = await self._db.execute(
+                    "UPDATE relations SET source_id = ?, updated_at = ? WHERE source_id = ?",
+                    (target_id, now, source_id),
+                )
+                out_count = cursor.rowcount
+                cursor = await self._db.execute(
+                    "UPDATE relations SET target_id = ?, updated_at = ? WHERE target_id = ?",
+                    (target_id, now, source_id),
+                )
+                in_count = cursor.rowcount
+                await self._db.execute("DELETE FROM entity_fts WHERE entity_id = ?", (source_id,))
+                await self._db.execute(
+                    "DELETE FROM entities WHERE id = ?", (source_id,),
+                )
 
         logger.info(
             "Merged entity '%s' -> '%s': %d outgoing, %d incoming relations migrated",
@@ -211,16 +213,18 @@ class GraphStore:
         }
 
     async def delete_entity(self, entity_id: str, user_id: str) -> bool:
-        cursor = await self._db.execute(
-            "DELETE FROM entities WHERE id = ? AND user_id = ?",
-            (entity_id, user_id),
-        )
-        await self._db.execute(
-            "DELETE FROM entity_fts WHERE entity_id = ?",
-            (entity_id,),
-        )
-        await self._db.commit()
-        deleted = cursor.rowcount > 0
+        from .sqlite_vec_backend import TransactionContext
+        async with self._write_lock:
+            async with TransactionContext(self._db):
+                cursor = await self._db.execute(
+                    "DELETE FROM entities WHERE id = ? AND user_id = ?",
+                    (entity_id, user_id),
+                )
+                await self._db.execute(
+                    "DELETE FROM entity_fts WHERE entity_id = ?",
+                    (entity_id,),
+                )
+                deleted = cursor.rowcount > 0
         if deleted:
             logger.info("Entity deleted: %s", entity_id[:12])
         return deleted
@@ -238,13 +242,15 @@ class GraphStore:
     ) -> str:
         relation_id = str(uuid.uuid4())
         now = datetime.now(timezone.utc).isoformat()
-        await self._db.execute(
-            """INSERT INTO relations (id, user_id, source_id, target_id, relation_type, weight, metadata, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (relation_id, user_id, source_id, target_id, relation_type, weight,
-             json.dumps(metadata or {}), now, now),
-        )
-        await self._db.commit()
+        from .sqlite_vec_backend import TransactionContext
+        async with self._write_lock:
+            async with TransactionContext(self._db):
+                await self._db.execute(
+                    """INSERT INTO relations (id, user_id, source_id, target_id, relation_type, weight, metadata, created_at, updated_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (relation_id, user_id, source_id, target_id, relation_type, weight,
+                     json.dumps(metadata or {}), now, now),
+                )
         logger.info("Relation created: %s (%s -> %s)", relation_id[:12], source_id[:12], target_id[:12])
         return relation_id
 

@@ -8,7 +8,7 @@ import logging
 from typing import Optional
 
 from ..config import EmbeddingConfig
-from .providers import EmbeddingProvider, LocalEmbeddingProvider, RemoteEmbeddingProvider
+from .providers import EmbeddingProvider, LocalEmbeddingProvider, RemoteEmbeddingProvider, NoneEmbeddingProvider
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +21,10 @@ def create_embedding_provider(config: EmbeddingConfig) -> EmbeddingProvider:
     2. If mode=local (default) → LocalEmbeddingProvider
     3. If mode=remote but no API configured → fallback to LocalEmbeddingProvider
     """
+    if config.mode == "none":
+        logger.info("Creating NoneEmbeddingProvider (FTS-only mode)")
+        return NoneEmbeddingProvider()
+
     if config.mode == "remote" and config.remote_api_url:
         logger.info("Creating RemoteEmbeddingProvider (url=%s)", config.remote_api_url)
         return RemoteEmbeddingProvider(config)

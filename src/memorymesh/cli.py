@@ -171,6 +171,11 @@ def main():
     init_parser = sub.add_parser("init", help="Initialize a workspace")
     init_parser.add_argument("path", nargs="?", default=None, help="Target directory")
 
+    # memorymesh serve
+    serve_parser = sub.add_parser("serve", help="Start the MCP server")
+    serve_parser.add_argument("--host", default="0.0.0.0", help="Bind address")
+    serve_parser.add_argument("--port", type=int, default=8090, help="Port")
+
     args = parser.parse_args()
 
     if args.command == "sessions":
@@ -180,5 +185,8 @@ def main():
     elif args.command == "init":
         from .main import cmd_init
         cmd_init([args.path] if args.path else [])
+    elif args.command == "serve":
+        from .main import main as server_main
+        server_main()
     else:
         parser.print_help()

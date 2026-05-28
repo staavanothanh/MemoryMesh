@@ -20,6 +20,11 @@ class EmbeddingProvider(ABC):
     async def get_embedding(self, text: str) -> List[float]:
         ...
 
+    async def get_dimension(self) -> int:
+        """Return the embedding dimension. Default: call get_embedding on a ping string."""
+        emb = await self.get_embedding("ping")
+        return len(emb)
+
     @abstractmethod
     async def prewarm(self):
         ...
@@ -34,6 +39,7 @@ class LocalEmbeddingProvider(EmbeddingProvider):
     def __init__(self, model_name: str):
         self._model_name = model_name
         self._model = None
+        self._dimension: Optional[int] = None
 
     async def get_embedding(self, text: str) -> List[float]:
         if self._model is None:
@@ -43,6 +49,12 @@ class LocalEmbeddingProvider(EmbeddingProvider):
     def _encode_sync(self, text: str) -> List[float]:
         return self._model.encode(text).tolist()
 
+    async def get_dimension(self) -> int:
+        if self._dimension is None:
+            emb = await self.get_embedding("ping")
+            self._dimension = len(emb)
+        return self._dimension
+
     async def prewarm(self):
         try:
             from sentence_transformers import SentenceTransformer
@@ -50,8 +62,9 @@ class LocalEmbeddingProvider(EmbeddingProvider):
             self._model = await loop.run_in_executor(
                 None, lambda: SentenceTransformer(self._model_name)
             )
-            _ = await self.get_embedding("ping")
-            logger.info("LocalEmbeddingProvider ready (model=%s)", self._model_name)
+            ping_emb = await self.get_embedding("ping")
+            self._dimension = len(ping_emb)
+            logger.info("LocalEmbeddingProvider ready (model=%s, dim=%d)", self._model_name, self._dimension)
         except ImportError:
             raise RuntimeError(
                 "sentence-transformers not installed. "
@@ -66,6 +79,7 @@ class RemoteEmbeddingProvider(EmbeddingProvider):
         self._api_url = config.remote_api_url.rstrip("/") + "/embeddings" if config.remote_api_url else ""
         self._api_key = config.remote_api_key
         self._client: Optional[httpx.AsyncClient] = None
+        self._dimension: Optional[int] = None
 
     async def get_embedding(self, text: str) -> List[float]:
         if not self._client:
@@ -88,11 +102,37 @@ class RemoteEmbeddingProvider(EmbeddingProvider):
             logger.error("Remote embedding failed: %s", e)
             raise
 
+    async def get_dimension(self) -> int:
+        if self._dimension is None:
+            emb = await self.get_embedding("ping")
+            self._dimension = len(emb)
+        return self._dimension
+
     async def prewarm(self):
         self._client = httpx.AsyncClient(timeout=30.0)
-        logger.info("RemoteEmbeddingProvider ready (url=%s)", self._api_url)
+        try:
+            ping_emb = await self.get_embedding("ping")
+            self._dimension = len(ping_emb)
+            logger.info("RemoteEmbeddingProvider ready (url=%s, dim=%d)", self._api_url, self._dimension)
+        except Exception as e:
+            logger.warning("Remote embedding prewarm ping failed (will retry): %s", e)
+            self._dimension = DIM
 
     async def close(self):
         if self._client:
             await self._client.aclose()
             self._client = None
+
+
+class NoneEmbeddingProvider(EmbeddingProvider):
+    """FTS-only mode — no embedding computation needed."""
+    DIM = 384
+
+    async def get_embedding(self, text: str) -> List[float]:
+        return [0.0] * self.DIM
+
+    async def get_dimension(self) -> int:
+        return self.DIM
+
+    async def prewarm(self):
+        pass

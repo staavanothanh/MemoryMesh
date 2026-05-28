@@ -63,7 +63,6 @@ class MemoryManager:
         self.backend = backend
         self.router = router
         self.hooks = hooks
-        self._write_lock = asyncio.Semaphore(config.sqlite_vec.max_concurrent_writes)
         self._tokenizer = tiktoken.get_encoding("cl100k_base")
         self._consolidator = ConsolidationEngine(config, backend, router)
         self.instinct_store = InstinctStore(config.instinct.db_path, config=config.instinct)
@@ -189,19 +188,18 @@ class MemoryManager:
         else:
             embedding = await get_embedding(text, self.config.embedding_model)
 
-        async with self._write_lock:
-            metadata = {"importance": importance, "level": level}
-            if tags:
-                metadata["tags"] = tags
-            if workspace_path:
-                metadata["workspace_path"] = workspace_path.replace("\\", "/").rstrip("/")
-            memory_id = await self.backend.add(
-                user_id=user_id,
-                content=text,
-                embedding=embedding,
-                metadata=metadata,
-                level=level,
-            )
+        metadata = {"importance": importance, "level": level}
+        if tags:
+            metadata["tags"] = tags
+        if workspace_path:
+            metadata["workspace_path"] = workspace_path.replace("\\", "/").rstrip("/")
+        memory_id = await self.backend.add(
+            user_id=user_id,
+            content=text,
+            embedding=embedding,
+            metadata=metadata,
+            level=level,
+        )
         logger.info("Memory saved: %s (background=%s)", memory_id, background)
 
         # Phase 7.3: Compute real embedding in background for bulk ingestion
@@ -363,7 +361,11 @@ class MemoryManager:
         fts_results: List[Dict],
         user_id: str,
     ) -> List[Dict]:
-        """Attach metadata from backend to FTS results for scoring and filtering."""
+        """Attach metadata from backend to FTS results for scoring and filtering.
+
+        Tries vector enrichment first, falls back to metadata-only if
+        vector table is unavailable (e.g. dimension mismatch).
+        """
         if not fts_results:
             return []
         ids = [r["id"] for r in fts_results]
@@ -381,8 +383,23 @@ class MemoryManager:
                 })
             return enriched
         except Exception as e:
-            logger.error("FTS enrichment failed for %d results: %s", len(fts_results), e, exc_info=True)
-            return [{**r, "metadata": {}} for r in fts_results]
+            logger.warning("Vector enrichment failed, falling back to metadata-only: %s", e)
+            try:
+                enriched_data = await self.backend.get_metadata_by_ids(ids)
+                data_map = {d["id"]: d for d in enriched_data}
+                enriched = []
+                for r in fts_results:
+                    record = data_map.get(r["id"], {})
+                    meta = record.get("metadata", {}) or {}
+                    enriched.append({
+                        **r,
+                        "metadata": meta,
+                        "score": r.get("score", 0.0),
+                    })
+                return enriched
+            except Exception as e2:
+                logger.error("Metadata-only enrichment also failed for %d results: %s", len(fts_results), e2, exc_info=True)
+                return [{**r, "metadata": {}} for r in fts_results]
 
     async def search_with_fallback(
         self,
@@ -392,47 +409,122 @@ class MemoryManager:
         workspace_path: Optional[str] = None,
         max_tokens: Optional[int] = None,
         min_score_threshold: float = 0.25,
+        cursor: Optional[dict] = None,
     ) -> tuple:
-        """3-tier fallback retrieval. Returns (results, tier_name, metadata)."""
+        """3-tier fallback retrieval with optional cursor-based pagination.
+
+        Args:
+            query: Search text
+            top_k: Maximum results per page
+            user_id: User scope
+            workspace_path: Workspace scope
+            max_tokens: Token budget for content truncation
+            min_score_threshold: Minimum score for semantic tier
+            cursor: Cursor dict from previous page (query_hash, tier, last_score, last_id, page)
+
+        Returns:
+            Tuple of (results, tier_name, metadata_dict, next_cursor_or_None)
+        """
+        import hashlib
         uid = user_id or self.config.default_user_id
 
-        # Tier 1: Semantic search via search_memory (with existing filters, budget)
-        tier1 = await self.search_memory(
-            query=query, top_k=top_k, user_id=uid,
-            workspace_path=workspace_path, max_tokens=max_tokens,
-        )
-        tier1_filtered = [r for r in tier1 if r.get("score", 0) >= min_score_threshold]
-        if tier1_filtered:
-            return tier1_filtered[:top_k], "semantic", {}
+        # If cursor provided, validate query_hash and use the specified tier directly
+        if cursor and isinstance(cursor, dict):
+            expected_hash = hashlib.sha256(query.encode()).hexdigest()[:16]
+            if cursor.get("query_hash") != expected_hash:
+                logger.warning("Cursor query_hash mismatch — ignoring cursor")
+                cursor = None
 
-        # Tier 2: FTS keyword search
-        keywords = self._extract_query_keywords(query)
-        if keywords:
+        # ── Tier 1: Semantic search via search_memory ──────────────────
+        if not cursor or cursor.get("tier") == "semantic":
+            tier1 = await self.search_memory(
+                query=query, top_k=top_k, user_id=uid,
+                workspace_path=workspace_path, max_tokens=max_tokens,
+            )
+            tier1_filtered = [r for r in tier1 if r.get("score", 0) >= min_score_threshold]
+
+            # Cursor-based pagination within semantic tier
+            if cursor and cursor.get("tier") == "semantic":
+                tier1_filtered = [
+                    r for r in tier1_filtered
+                    if r.get("score", 0.0) < cursor.get("last_score", 1.0)
+                    or (r.get("score", 0.0) == cursor.get("last_score", 1.0)
+                        and r.get("id", "") < cursor.get("last_id", ""))
+                ]
+
+            if tier1_filtered:
+                results = tier1_filtered[:top_k]
+                next_cursor = None
+                if len(results) == top_k and len(tier1_filtered) > top_k:
+                    last = results[-1]
+                    next_cursor = {
+                        "query_hash": hashlib.sha256(query.encode()).hexdigest()[:16],
+                        "tier": "semantic",
+                        "last_score": last.get("score", 0.0),
+                        "last_id": last.get("id", ""),
+                        "page": (cursor.get("page", 1) if cursor else 0) + 1,
+                    }
+                return results, "semantic", {}, next_cursor
+
+        # ── Tier 2: FTS keyword search ───────────────────────────────
+        if not cursor or cursor.get("tier") in ("fts_keyword", "chronological"):
+            keywords = self._extract_query_keywords(query)
+            if keywords:
+                try:
+                    tier2_raw = await self.backend.fts_search(
+                        keywords, uid, limit=top_k * 2,
+                    )
+                    tier2_enriched = await self._enrich_fts_results(tier2_raw, uid)
+                    tier2_filtered = self._apply_search_filters(tier2_enriched, workspace_path)
+
+                    # Cursor-based pagination within FTS tier
+                    if cursor and cursor.get("tier") == "fts_keyword":
+                        tier2_filtered = [
+                            r for r in tier2_filtered
+                            if r.get("score", 0.0) < cursor.get("last_score", 1.0)
+                            or (r.get("score", 0.0) == cursor.get("last_score", 1.0)
+                                and r.get("id", "") < cursor.get("last_id", ""))
+                        ]
+
+                    if tier2_filtered:
+                        results = self._dicts_to_search_results(tier2_filtered[:top_k])
+                        next_cursor = None
+                        if len(results) == top_k and len(tier2_filtered) > top_k:
+                            last = results[-1]
+                            next_cursor = {
+                                "query_hash": hashlib.sha256(query.encode()).hexdigest()[:16],
+                                "tier": "fts_keyword",
+                                "last_score": last.get("score", 0.0),
+                                "last_id": last.get("id", ""),
+                                "page": (cursor.get("page", 1) if cursor else 0) + 1,
+                            }
+                        return results, "fts_keyword", {}, next_cursor
+                except Exception as e:
+                    logger.error("Tier 2 FTS failed: %s", e)
+
+        # ── Tier 3: Chronological scan ───────────────────────────────
+        if not cursor or cursor.get("tier") == "chronological":
             try:
-                tier2_raw = await self.backend.fts_search(
-                    keywords, uid, limit=top_k * 2,
-                )
-                tier2_enriched = await self._enrich_fts_results(tier2_raw, uid)
-                tier2_filtered = self._apply_search_filters(tier2_enriched, workspace_path)
-                if tier2_filtered:
-                    # Convert enriched dict to SearchResult
-                    results = self._dicts_to_search_results(tier2_filtered[:top_k])
-                    return results, "fts_keyword", {}
+                tier3_raw = await self.backend.list_recent(uid, limit=top_k)
+                tier3_enriched = await self._enrich_fts_results(tier3_raw, uid)
+                tier3_filtered = self._apply_search_filters(tier3_enriched, workspace_path)
+                if tier3_filtered:
+                    results = self._dicts_to_search_results(tier3_filtered[:top_k])
+                    next_cursor = None
+                    if len(results) == top_k and len(tier3_filtered) > top_k:
+                        last = results[-1]
+                        next_cursor = {
+                            "query_hash": hashlib.sha256(query.encode()).hexdigest()[:16],
+                            "tier": "chronological",
+                            "last_score": last.get("score", 0.0),
+                            "last_id": last.get("id", ""),
+                            "page": (cursor.get("page", 1) if cursor else 0) + 1,
+                        }
+                    return results, "chronological", {}, next_cursor
             except Exception as e:
-                logger.error("Tier 2 FTS failed: %s", e)
+                logger.error("Tier 3 chronological fallback failed: %s", e)
 
-        # Tier 3: Chronological scan — always has results
-        try:
-            tier3_raw = await self.backend.list_recent(uid, limit=top_k)
-            tier3_enriched = await self._enrich_fts_results(tier3_raw, uid)
-            tier3_filtered = self._apply_search_filters(tier3_enriched, workspace_path)
-            if tier3_filtered:
-                results = self._dicts_to_search_results(tier3_filtered[:top_k])
-                return results, "chronological", {}
-        except Exception as e:
-            logger.error("Tier 3 chronological fallback failed: %s", e)
-
-        return [], "empty", {}
+        return [], "empty", {}, None
 
     def _dicts_to_search_results(self, dicts: List[Dict]) -> List[SearchResult]:
         """Convert internal dict results to SearchResult objects."""
@@ -545,11 +637,9 @@ class MemoryManager:
             meta_tokens = len(self._tokenizer.encode(meta_str))
             content_tokens = len(self._tokenizer.encode(mem["content"]))
             mem_tokens = meta_tokens + content_tokens
-            if mem_tokens <= 0:
-                continue
             if total_tokens + mem_tokens > budget:
-                available = budget - total_tokens
-                if available > 10:
+                available = budget - total_tokens - meta_tokens
+                if available > 0:
                     truncated = self._tokenizer.decode(self._tokenizer.encode(mem["content"])[:available])
                     mem["content"] = truncated + "..."
                     limited_results.append(mem)
@@ -584,8 +674,7 @@ class MemoryManager:
 
     async def forget_memory(self, memory_id: str) -> bool:
         """Soft-delete a memory (mark as archived)."""
-        async with self._write_lock:
-            success = await self.backend.update_metadata(memory_id, {"archived": True})
+        success = await self.backend.update_metadata(memory_id, {"archived": True})
         if success:
             logger.info("Memory soft-deleted: %s", memory_id)
         return success
@@ -634,16 +723,14 @@ class MemoryManager:
 
     async def archive_memory(self, memory_id: str) -> bool:
         """Archive a memory (hide from recall, still in storage)."""
-        async with self._write_lock:
-            success = await self.backend.update_metadata(memory_id, {"archived": True})
+        success = await self.backend.update_metadata(memory_id, {"archived": True})
         if success:
             logger.info("Memory archived: %s", memory_id)
         return success
 
     async def unarchive_memory(self, memory_id: str) -> bool:
         """Restore an archived memory."""
-        async with self._write_lock:
-            success = await self.backend.update_metadata(memory_id, {"archived": False})
+        success = await self.backend.update_metadata(memory_id, {"archived": False})
         if success:
             logger.info("Memory unarchived: %s", memory_id)
         return success

@@ -10,8 +10,8 @@
     <img src="https://img.shields.io/badge/Python-3.12+-blue?style=for-the-badge&logo=python" alt="Python Version">
     <img src="https://img.shields.io/badge/Database-SQLite--vec-orange?style=for-the-badge&logo=sqlite" alt="Database">
     <img src="https://img.shields.io/badge/License-MIT-yellow?style=for-the-badge" alt="License">
-    <img src="https://img.shields.io/badge/Version-0.5.0-purple?style=for-the-badge" alt="Version 0.5.0">
-    <img src="https://img.shields.io/badge/Tests-326%20passed-brightgreen?style=for-the-badge" alt="Tests">
+    <img src="https://img.shields.io/badge/Version-0.6.0-purple?style=for-the-badge" alt="Version 0.6.0">
+    <img src="https://img.shields.io/badge/Tests-579%20passed-brightgreen?style=for-the-badge" alt="Tests">
   </p>
 </div>
 
@@ -138,7 +138,7 @@ src/memorymesh/
 │   ├── async_batch_logger.py  zlib batch compression
 │   └── codebase_adapter.py    Read-only ACL adapter
 ├── mcp_server/          Server lifecycle, modular handlers (5 files)
-tests/                   326+ tests (pytest, asyncio_mode=auto)
+tests/                   579+ tests (pytest, asyncio_mode=auto)
 ```
 
 ---
@@ -168,6 +168,9 @@ pip install "memorymesh[test,local,cli]"
 
 # Gộp extras tuỳ ý: pip install "memorymesh[local,cli]"
 
+# E. Docker (không embeddings)
+docker compose -f docker/docker-compose.yml up --build    # Chế độ EMBEDDING_MODE=none
+
 # Khởi tạo workspace
 python -m memorymesh init               # sinh .env, db/, cấu hình MCP
 ```
@@ -183,7 +186,7 @@ Chỉnh sửa tệp `.env` trong workspace:
 | `ROUTER_URL` | `http://127.0.0.1:20128/v1` | LLM endpoint |
 | `DEFAULT_MODEL` | `your-model` | Model chính cho tóm tắt |
 | `BACKGROUND_MODEL_POOL` | *(Trống)* | Model rẻ cho fact extraction nền |
-| `EMBEDDING_MODE` | `local` | `local` hoặc `remote` |
+| `EMBEDDING_MODE` | `local` | `local` (sentence-transformers), `remote` (API), hoặc `none` (zero-dependency, Docker). |
 | `EMBEDDING_MODEL` | `paraphrase-multilingual...` | Tên model nhúng |
 | `REMOTE_EMBEDDING_API_URL` | *(Trống)* | Endpoint API từ xa |
 | `REMOTE_EMBEDDING_API_KEY` | *(Trống)* | API key |
@@ -215,6 +218,7 @@ MemoryMesh xuất ra **24 công cụ MCP** cho agent:
 memorymesh sessions --limit 20    # 20 phiên gần nhất
 memorymesh stats                  # thống kê hệ thống
 memorymesh init                   # khởi tạo workspace
+memorymesh serve                  # chạy dưới dạng SSE HTTP server (Docker)
 ```
 
 ### 📊 Microbenchmarks
@@ -232,7 +236,7 @@ memorymesh init                   # khởi tạo workspace
 
 ```bash
 make install-all       # Cài đặt môi trường dev
-make test              # 326+ bài kiểm thử
+make test              # 579+ bài kiểm thử
 make test-unit         # Unit tests
 make test-int          # Integration tests
 make lint              # Linter

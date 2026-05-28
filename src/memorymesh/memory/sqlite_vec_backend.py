@@ -43,7 +43,7 @@ class TransactionContext:
         last_error = None
         for attempt in range(self._max_retries):
             try:
-                await self._db.execute("BEGIN")
+                await self._db.execute("BEGIN IMMEDIATE")
                 return self
             except Exception as e:
                 err_str = str(e).lower()
@@ -95,6 +95,7 @@ class SqliteVecBackend:
     def __init__(self, db_path: str):
         self.db_path = db_path
         self._db: Optional[aiosqlite.Connection] = None
+        self._write_lock: asyncio.Lock = asyncio.Lock()
         self.graph: Optional[GraphStore] = None
         self._wal_task: Optional[asyncio.Task] = None
         self._wal_interval: float = 30.0
@@ -127,7 +128,7 @@ class SqliteVecBackend:
         await self._db.execute("PRAGMA cache_size = -20000")
         await self._db.execute("PRAGMA mmap_size = 268435456")
         await self._db.execute("PRAGMA temp_store = MEMORY")
-        self.graph = GraphStore(self._db)
+        self.graph = GraphStore(self._db, self._write_lock)
         await self._create_schema()
         await self.graph.create_schema()
         await self._db.commit()
@@ -222,6 +223,13 @@ class SqliteVecBackend:
                 created_at      TEXT NOT NULL
             )
         """)
+        # Table 5: internal metadata (persistent key-value store)
+        await self._db.execute("""
+            CREATE TABLE IF NOT EXISTS _metadata (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            )
+        """)
         # Trigger: auto-cleanup vec + fts on soft-delete
         await self._db.execute("""
             CREATE TRIGGER IF NOT EXISTS trg_archive_cleanup
@@ -233,38 +241,66 @@ class SqliteVecBackend:
             END
         """)
 
-    async def _ensure_vec_table(self, dim: int):
-        """Lazily create vec0 table with the correct embedding dimension.
+    @staticmethod
+    def _extract_dim_from_sql(sql: str) -> Optional[int]:
+        """Parse 'FLOAT[dim]' from vec0 CREATE TABLE SQL, return dim or None."""
+        import re
+        m = re.search(r'FLOAT\[(\d+)\]', sql)
+        return int(m.group(1)) if m else None
 
-        If the table already exists with a different dimension, drop and
-        recreate it to avoid dimension mismatch errors.
+    async def ensure_vector_dimension(self, dim: int):
+        """Validate or create vec_memories with correct dimension.
+
+        This method acquires self._write_lock internally. Callers should NOT
+        hold the lock before calling, to avoid deadlock (asyncio.Lock is not reentrant).
+
+        If the table already exists with a different dimension, raises ValueError
+        instead of silently dropping data. NEVER drops existing vectors.
         """
         if self._db is None:
             return
-        cursor = await self._db.execute(
-            "SELECT sql FROM sqlite_master WHERE type='table' AND name='vec_memories'"
-        )
-        row = await cursor.fetchone()
-        if row:
-            # Table exists — check if dimension matches
-            existing_sql = row["sql"]
-            expected = f"FLOAT[{dim}]"
-            if expected not in existing_sql:
-                logger.warning("vec_memories dimension mismatch: dropping and recreating (dim=%d)", dim)
-                await self._db.execute("DROP TABLE IF EXISTS vec_memories")
-                await self._db.execute(f"""
-                    CREATE VIRTUAL TABLE IF NOT EXISTS vec_memories USING vec0(
-                        memory_id TEXT PRIMARY KEY,
-                        embedding FLOAT[{dim}]
+
+        async with self._write_lock:
+            # Read stored dimension from _metadata
+            cursor = await self._db.execute(
+                "SELECT value FROM _metadata WHERE key = 'vec_dimension'"
+            )
+            row = await cursor.fetchone()
+            stored_dim = int(row["value"]) if row else None
+
+            # Check if vec_memories table exists
+            cursor = await self._db.execute(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name='vec_memories'"
+            )
+            row = await cursor.fetchone()
+
+            needs_create = row is None or self._extract_dim_from_sql(row["sql"]) is None
+
+            if row:
+                existing_dim = self._extract_dim_from_sql(row["sql"])
+                if existing_dim is not None and existing_dim != dim:
+                    raise ValueError(
+                        f"Vector dimension mismatch: existing={existing_dim}, requested={dim}. "
+                        f"Run `python -m memorymesh rebuild-vectors --dim {dim}` to migrate, "
+                        f"or change EMBEDDING_MODEL back to the original model."
                     )
-                """)
-        else:
-            await self._db.execute(f"""
-                CREATE VIRTUAL TABLE IF NOT EXISTS vec_memories USING vec0(
-                    memory_id TEXT PRIMARY KEY,
-                    embedding FLOAT[{dim}]
+
+            # Wrap writes in TransactionContext to properly close implicit transactions
+            async with TransactionContext(self._db):
+                if needs_create:
+                    # Create vec_memories with requested dimension
+                    await self._db.execute(f"""
+                        CREATE VIRTUAL TABLE IF NOT EXISTS vec_memories USING vec0(
+                            memory_id TEXT PRIMARY KEY,
+                            embedding FLOAT[{dim}]
+                        )
+                    """)
+
+                # Persist dimension metadata
+                await self._db.execute(
+                    "INSERT OR REPLACE INTO _metadata(key, value) VALUES ('vec_dimension', ?)",
+                    (str(dim),)
                 )
-            """)
 
     # ------------------------------------------------------------------
     # Core write — single ACID transaction
@@ -290,95 +326,99 @@ class SqliteVecBackend:
         normalized = normalize_l2(embedding)
         vec_bytes = np.array(normalized, dtype=np.float32).tobytes()
 
-        await self._ensure_vec_table(len(embedding))
+        await self.ensure_vector_dimension(len(embedding))
 
-        async with TransactionContext(self._db):
-            await self._db.execute(
-                """INSERT INTO memories
-                   (id, user_id, content, metadata_json, level, importance,
-                    created_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                (memory_id, user_id, content, json.dumps(meta), level, importance,
-                 now, now),
-            )
-            await self._db.execute(
-                "INSERT INTO vec_memories(memory_id, embedding) VALUES (?, ?)",
-                (memory_id, vec_bytes),
-            )
-            await self._db.execute(
-                "INSERT INTO memory_fts(memory_id, user_id, level, content) VALUES (?, ?, ?, ?)",
-                (memory_id, user_id, level, content),
-            )
-            await self._db.execute(
-                """INSERT INTO audit_log(action, memory_id, user_id, content_preview, created_at)
-                   VALUES ('add', ?, ?, ?, ?)""",
-                (memory_id, user_id, content[:200], now),
-            )
+        async with self._write_lock:
+            async with TransactionContext(self._db):
+                await self._db.execute(
+                    """INSERT INTO memories
+                       (id, user_id, content, metadata_json, level, importance,
+                        created_at, updated_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (memory_id, user_id, content, json.dumps(meta), level, importance,
+                     now, now),
+                )
+                await self._db.execute(
+                    "INSERT INTO vec_memories(memory_id, embedding) VALUES (?, ?)",
+                    (memory_id, vec_bytes),
+                )
+                await self._db.execute(
+                    "INSERT INTO memory_fts(memory_id, user_id, level, content) VALUES (?, ?, ?, ?)",
+                    (memory_id, user_id, level, content),
+                )
+                await self._db.execute(
+                    """INSERT INTO audit_log(action, memory_id, user_id, content_preview, created_at)
+                       VALUES ('add', ?, ?, ?, ?)""",
+                    (memory_id, user_id, content[:200], now),
+                )
         return memory_id
 
     async def delete(self, memory_id: str) -> bool:
         now = datetime.now(timezone.utc).isoformat()
-        async with TransactionContext(self._db):
-            cursor = await self._db.execute(
-                "SELECT user_id FROM memories WHERE id = ?", (memory_id,)
-            )
-            row = await cursor.fetchone()
-            if not row:
-                return False
-            uid = row["user_id"]
-            await self._db.execute(
-                "DELETE FROM memories WHERE id = ?", (memory_id,)
-            )
-            await self._db.execute(
-                "DELETE FROM vec_memories WHERE memory_id = ?", (memory_id,)
-            )
-            await self._db.execute(
-                "DELETE FROM memory_fts WHERE memory_id = ?", (memory_id,)
-            )
-            await self._db.execute(
-                """INSERT INTO audit_log(action, memory_id, user_id, content_preview, created_at)
-                   VALUES ('delete', ?, ?, '', ?)""",
-                (memory_id, uid, now),
-            )
+        async with self._write_lock:
+            async with TransactionContext(self._db):
+                cursor = await self._db.execute(
+                    "SELECT user_id FROM memories WHERE id = ?", (memory_id,)
+                )
+                row = await cursor.fetchone()
+                if not row:
+                    return False
+                uid = row["user_id"]
+                await self._db.execute(
+                    "DELETE FROM memories WHERE id = ?", (memory_id,)
+                )
+                await self._db.execute(
+                    "DELETE FROM vec_memories WHERE memory_id = ?", (memory_id,)
+                )
+                await self._db.execute(
+                    "DELETE FROM memory_fts WHERE memory_id = ?", (memory_id,)
+                )
+                await self._db.execute(
+                    """INSERT INTO audit_log(action, memory_id, user_id, content_preview, created_at)
+                       VALUES ('delete', ?, ?, '', ?)""",
+                    (memory_id, uid, now),
+                )
         return True
 
     async def update(
         self, memory_id: str, content: str, metadata: Dict[str, Any]
     ) -> bool:
         now = datetime.now(timezone.utc).isoformat()
-        existing = await self._get_by_id_full(memory_id)
-        if not existing:
-            return False
-        merged_meta = {**existing["metadata"], **metadata, "updated_at": now}
-        importance = metadata.get("importance", existing["importance"])
-        async with TransactionContext(self._db):
-            await self._db.execute(
-                """UPDATE memories
-                   SET content=?, metadata_json=?, importance=?, updated_at=?
-                   WHERE id=?""",
-                (content, json.dumps(merged_meta), importance, now, memory_id),
-            )
-            await self._db.execute(
-                "UPDATE memory_fts SET content=? WHERE memory_id=?",
-                (content, memory_id),
-            )
+        async with self._write_lock:
+            existing = await self._get_by_id_full(memory_id)
+            if not existing:
+                return False
+            merged_meta = {**existing["metadata"], **metadata, "updated_at": now}
+            importance = metadata.get("importance", existing["importance"])
+            async with TransactionContext(self._db):
+                await self._db.execute(
+                    """UPDATE memories
+                       SET content=?, metadata_json=?, importance=?, updated_at=?
+                       WHERE id=?""",
+                    (content, json.dumps(merged_meta), importance, now, memory_id),
+                )
+                await self._db.execute(
+                    "UPDATE memory_fts SET content=? WHERE memory_id=?",
+                    (content, memory_id),
+                )
         return True
 
     async def update_metadata(self, memory_id: str, metadata: Dict[str, Any]) -> bool:
         now = datetime.now(timezone.utc).isoformat()
-        existing = await self._get_by_id_full(memory_id)
-        if not existing:
-            return False
-        merged = {**existing["metadata"], **metadata, "updated_at": now}
-        importance = metadata.get("importance", existing["importance"])
-        new_level = metadata.get("level", existing.get("level"))
-        async with TransactionContext(self._db):
-            await self._db.execute(
-                """UPDATE memories
-                   SET metadata_json=?, importance=?, level=?, updated_at=?
-                   WHERE id=?""",
-                (json.dumps(merged), importance, new_level, now, memory_id),
-            )
+        async with self._write_lock:
+            existing = await self._get_by_id_full(memory_id)
+            if not existing:
+                return False
+            merged = {**existing["metadata"], **metadata, "updated_at": now}
+            importance = metadata.get("importance", existing["importance"])
+            new_level = metadata.get("level", existing.get("level"))
+            async with TransactionContext(self._db):
+                await self._db.execute(
+                    """UPDATE memories
+                       SET metadata_json=?, importance=?, level=?, updated_at=?
+                       WHERE id=?""",
+                    (json.dumps(merged), importance, new_level, now, memory_id),
+                )
         return True
 
     async def update_embedding(self, memory_id: str, embedding: List[float]) -> bool:
@@ -388,11 +428,12 @@ class SqliteVecBackend:
         import numpy as np
         vec_bytes = np.array(normalized, dtype=np.float32).tobytes()
         try:
-            async with TransactionContext(self._db):
-                await self._db.execute(
-                    "UPDATE vec_memories SET embedding = ? WHERE memory_id = ?",
-                    (vec_bytes, memory_id),
-                )
+            async with self._write_lock:
+                async with TransactionContext(self._db):
+                    await self._db.execute(
+                        "UPDATE vec_memories SET embedding = ? WHERE memory_id = ?",
+                        (vec_bytes, memory_id),
+                    )
             return True
         except Exception as e:
             logger.error("Embedding update failed for %s: %s", memory_id[:12], e)
@@ -414,25 +455,27 @@ class SqliteVecBackend:
             ids,
         )
         rows = await cursor.fetchall()
-        async with TransactionContext(self._db):
-            for row in rows:
-                meta = json.loads(row["metadata_json"])
-                meta[flag] = value
-                meta["updated_at"] = now
-                await self._db.execute(
-                    "UPDATE memories SET metadata_json=?, updated_at=? WHERE id=?",
-                    (json.dumps(meta), now, row["id"]),
-                )
+        async with self._write_lock:
+            async with TransactionContext(self._db):
+                for row in rows:
+                    meta = json.loads(row["metadata_json"])
+                    meta[flag] = value
+                    meta["updated_at"] = now
+                    await self._db.execute(
+                        "UPDATE memories SET metadata_json=?, updated_at=? WHERE id=?",
+                        (json.dumps(meta), now, row["id"]),
+                    )
 
     async def soft_delete(self, memory_id: str) -> bool:
         """Mark memory as deleted (keeps vec + fts — trigger handles cleanup)."""
         now = datetime.now(timezone.utc).isoformat()
-        async with TransactionContext(self._db):
-            cursor = await self._db.execute(
-                "UPDATE memories SET deleted=1, updated_at=? WHERE id=? AND deleted=0",
-                (now, memory_id),
-            )
-            return cursor.rowcount > 0
+        async with self._write_lock:
+            async with TransactionContext(self._db):
+                cursor = await self._db.execute(
+                    "UPDATE memories SET deleted=1, updated_at=? WHERE id=? AND deleted=0",
+                    (now, memory_id),
+                )
+                return cursor.rowcount > 0
 
     # ------------------------------------------------------------------
     # Search — ANN via subquery pattern
@@ -455,7 +498,7 @@ class SqliteVecBackend:
         vec_bytes = np.array(normalized, dtype=np.float32).tobytes()
         pool = max(top_k * 2, 10)
 
-        await self._ensure_vec_table(len(embedding))
+        await self.ensure_vector_dimension(len(embedding))
 
         cursor = await self._db.execute(
             "SELECT memory_id, distance FROM vec_memories WHERE embedding MATCH ? AND k = ?",
@@ -594,26 +637,27 @@ class SqliteVecBackend:
 
     async def delete_by_tag(self, user_id: str, tag: str) -> int:
         now = datetime.now(timezone.utc).isoformat()
-        async with TransactionContext(self._db):
-            cursor = await self._db.execute(
-                """SELECT m.id FROM memories m, json_each(json_extract(m.metadata_json, '$.tags'))
-               WHERE m.user_id = ? AND json_each.value = ? AND m.deleted = 0
-               ORDER BY m.rowid DESC""",
-                (user_id, tag),
-            )
-            ids = [r[0] for r in await cursor.fetchall()]
-            if not ids:
-                return 0
-            placeholders = ",".join("?" for _ in ids)
-            await self._db.execute(
-                f"DELETE FROM memories WHERE id IN ({placeholders})", ids
-            )
-            await self._db.execute(
-                f"DELETE FROM vec_memories WHERE memory_id IN ({placeholders})", ids
-            )
-            await self._db.execute(
-                f"DELETE FROM memory_fts WHERE memory_id IN ({placeholders})", ids
-            )
+        async with self._write_lock:
+            async with TransactionContext(self._db):
+                cursor = await self._db.execute(
+                    """SELECT m.id FROM memories m, json_each(json_extract(m.metadata_json, '$.tags'))
+                   WHERE m.user_id = ? AND json_each.value = ? AND m.deleted = 0
+                   ORDER BY m.rowid DESC""",
+                    (user_id, tag),
+                )
+                ids = [r[0] for r in await cursor.fetchall()]
+                if not ids:
+                    return 0
+                placeholders = ",".join("?" for _ in ids)
+                await self._db.execute(
+                    f"DELETE FROM memories WHERE id IN ({placeholders})", ids
+                )
+                await self._db.execute(
+                    f"DELETE FROM vec_memories WHERE memory_id IN ({placeholders})", ids
+                )
+                await self._db.execute(
+                    f"DELETE FROM memory_fts WHERE memory_id IN ({placeholders})", ids
+                )
         logger.info("Deleted %d memories by tag '%s' user '%s'", len(ids), tag, user_id)
         return len(ids)
 
@@ -712,6 +756,35 @@ class SqliteVecBackend:
                 "metadata": json.loads(row["metadata_json"]),
                 "level": row["level"],
                 "embedding": np.frombuffer(row["embedding"], dtype=np.float32).tolist(),
+            }
+            for row in rows
+        ]
+
+    async def get_metadata_by_ids(
+        self, ids: List[str]
+    ) -> List[Dict[str, Any]]:
+        """Metadata-only enrichment — no vec_memories JOIN.
+
+        Used as fallback when vector table is unavailable or dimension
+        mismatch prevents vector enrichment.
+        """
+        if not ids:
+            return []
+        placeholders = ",".join("?" for _ in ids)
+        cursor = await self._db.execute(
+            f"""SELECT m.id, m.user_id, m.content, m.metadata_json, m.level
+                FROM memories m
+                WHERE m.id IN ({placeholders}) AND m.deleted = 0""",
+            ids,
+        )
+        rows = await cursor.fetchall()
+        return [
+            {
+                "id": row["id"],
+                "user_id": row["user_id"],
+                "content": row["content"],
+                "metadata": json.loads(row["metadata_json"]),
+                "level": row["level"],
             }
             for row in rows
         ]

@@ -64,8 +64,7 @@ async def test_search_entities_success(adapter):
     adapter._available = True
 
     # Patch wait_for to just return the coroutine result
-    with patch('asyncio.wait_for', new_callable=AsyncMock) as m_wait_for:
-        m_wait_for.side_effect = mock_wait_for
+    with patch('asyncio.wait_for', mock_wait_for):
         results = await adapter.search_entities("test")
         assert len(results) == 1
         assert results[0]["id"] == "1"
@@ -100,8 +99,7 @@ async def test_search_relations_success(adapter):
     adapter._db = mock_db
     adapter._available = True
 
-    with patch('asyncio.wait_for', new_callable=AsyncMock) as m_wait_for:
-        m_wait_for.side_effect = mock_wait_for
+    with patch('asyncio.wait_for', mock_wait_for):
         results = await adapter.search_relations("1")
         assert len(results) == 1
         assert results[0]["id"] == "r1"

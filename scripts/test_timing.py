@@ -116,7 +116,7 @@ async def test_timing():
     manager = MemoryManager(config, backend, router, hooks=global_hooks)
 
     # Test 1: semantic search (cached embedding)
-    results, tier, _ = await measure(
+    results, tier, _, _ = await measure(
         "search_with_fallback('cuối buổi trước chúng ta làm gì')",
         manager.search_with_fallback(
             query="cuối buổi trước chúng ta làm gì",
@@ -129,7 +129,7 @@ async def test_timing():
         ok(f"  → tier={tier}, no results")
 
     # Test 2: semantic search for "Phase 6C sqlite-vec"
-    results2, tier2, _ = await measure(
+    results2, tier2, _, _ = await measure(
         "search_with_fallback('Phase 6C sqlite-vec')",
         manager.search_with_fallback(
             query="Phase 6C sqlite-vec",
@@ -142,7 +142,7 @@ async def test_timing():
         ok(f"  → tier={tier2}, no results")
 
     # Test 3: FTS-friendly search
-    results3, tier3, _ = await measure(
+    results3, tier3, _, _ = await measure(
         "search_with_fallback('buoi truoc session')",
         manager.search_with_fallback(
             query="buoi truoc session",
@@ -155,7 +155,7 @@ async def test_timing():
         ok(f"  → tier={tier3}, no results")
 
     # Test 4: second recall (should be faster - embedding cached)
-    results4, tier4, _ = await measure(
+    results4, tier4, _, _ = await measure(
         "search_with_fallback('cuối buổi trước chúng ta làm gì') [cached]",
         manager.search_with_fallback(
             query="cuối buổi trước chúng ta làm gì",

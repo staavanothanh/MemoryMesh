@@ -179,12 +179,12 @@ async def test_e2e():
     manager = MemoryManager(config, backend, router, hooks=global_hooks)
 
     # 19. search_with_fallback — fallback chain works
-    results, tier, _ = await manager.search_with_fallback(query="ngôn ngữ lập trình", top_k=5, user_id="Shinn")
+    results, tier, _, _ = await manager.search_with_fallback(query="ngôn ngữ lập trình", top_k=5, user_id="Shinn")
     assert len(results) > 0
     ok(f"search_with_fallback tier={tier}, count={len(results)}")
 
     # 20. search_with_fallback — empty query falls to FTS or chronological
-    results, tier, _ = await manager.search_with_fallback(query="zzzzz", top_k=5, user_id="Shinn")
+    results, tier, _, _ = await manager.search_with_fallback(query="zzzzz", top_k=5, user_id="Shinn")
     assert tier in ("fts_keyword", "chronological", "empty")
     ok(f"search_with_fallback empty query tier={tier}")
 

@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 import signal
+import sys
 import logging
 import time
 from typing import Optional
@@ -35,37 +36,33 @@ from ..utils.rate_limiter import get_global_limiter
 
 logger = logging.getLogger(__name__)
 
-PID_FILE = "memorymesh.pid"
-
-
-def _ensure_single_instance(db_dir: str):
-    """Kill orphaned MCP server process and write PID file."""
-    pid_file = os.path.join(db_dir, PID_FILE)
-    if os.path.exists(pid_file):
+def _try_acquire_lock(lock_path: str):
+    """Atomic cross-platform file lock. Exits if another instance is running."""
+    if sys.platform == "win32":
+        import msvcrt
+        fd = os.open(lock_path, os.O_CREAT | os.O_WRONLY)
         try:
-            with open(pid_file) as f:
-                old_pid = int(f.read().strip())
-            try:
-                os.kill(old_pid, signal.SIGTERM)
-                for _ in range(10):
-                    try:
-                        os.kill(old_pid, 0)
-                        time.sleep(0.05)
-                    except (OSError, ProcessLookupError):
-                        break
-            except (OSError, ProcessLookupError):
-                pass
-        except (ValueError, OSError):
-            pass
-    with open(pid_file, "w") as f:
-        f.write(str(os.getpid()))
+            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+            return fd
+        except OSError:
+            os.close(fd)
+            logger.error("Another MemoryMesh instance is already running in %s", os.path.dirname(lock_path))
+            sys.exit(1)
+    else:
+        import fcntl
+        fd = os.open(lock_path, os.O_CREAT | os.O_WRONLY)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return fd
+        except OSError:
+            os.close(fd)
+            logger.error("Another MemoryMesh instance is already running in %s", os.path.dirname(lock_path))
+            sys.exit(1)
 
 
-def _remove_pid_file(db_dir: str):
-    pid_file = os.path.join(db_dir, PID_FILE)
+def _release_lock(fd):
     try:
-        if os.path.exists(pid_file):
-            os.remove(pid_file)
+        os.close(fd)
     except OSError:
         pass
 
@@ -176,15 +173,12 @@ class MemoryMeshServer:
                         }, ensure_ascii=False)
                     )]
 
-            # Detect client from MCP request context (per-connection, via contextvars)
-            client_name = ""
+            # Detect client from MCP request context (per-connection, via session map)
             try:
                 ctx = self.mcp_server.request_context
-                client_caps = ctx.session.client_params
-                if client_caps and client_caps.client_info:
-                    client_name = client_caps.client_info.name or ""
+                self.handlers._connection_key = str(id(ctx.session))
             except (LookupError, AttributeError):
-                pass
+                self.handlers._connection_key = "default"
 
             # Auto-init session if none active (skip for new_session itself to avoid recursion)
             if name != "new_session":
@@ -262,14 +256,34 @@ class MemoryMeshServer:
             logger.error("Raw log failed: %s", e)
 
     async def _initialize_fast(self):
-        """Fast init: open DBs, warm embedder, and create a fresh session."""
+        """Fast init: warm embedder first, open DBs, validate vector dimension."""
+        # 1. Init embedder FIRST so we know the embedding dimension
+        embedder_dim: Optional[int] = None
+        try:
+            await init_embedder(self.config.embedding)
+            from ..embedder import get_embedding_dimension
+            embedder_dim = await get_embedding_dimension()
+        except RuntimeError as e:
+            if self.config.embedding.mode == "local":
+                logger.error(
+                    "Local embedding requires sentence-transformers. "
+                    "Set EMBEDDING_MODE=none for FTS-only mode, or "
+                    "install: pip install 'memorymesh[local]'"
+                )
+                raise
+            logger.warning("Embedder init failed: %s", e)
+            raise
+
+        # 2. Init backend (opens DB, creates schema)
         await self.backend.initialize()
         self.backend.start_wal_checkpoint()
         await self.session_store.initialize()
         if self.config.instinct.enabled:
             await self.manager.instinct_store.initialize()
-        # Pre-warm embedding model (factory-based — local or remote)
-        await init_embedder(self.config.embedding)
+
+        # 3. Validate/init vector dimension from embedder
+        if embedder_dim is not None:
+            await self.backend.ensure_vector_dimension(embedder_dim)
         if self.config.session.auto_create_session:
             system_prompt = COMBINED_AGENT_INSTRUCTION
             session_id = await self.session_store.create_session(
@@ -278,6 +292,7 @@ class MemoryMeshServer:
             )
             logger.info("Auto-created fresh session: %s", session_id)
             await self.handlers.set_session(session_id)
+            self.handlers._connection_key = "default"
         self.manager.graph = self.backend.graph
         from ..memory.context_manager import ContextManager
         self.manager.context_manager = ContextManager(self.backend)
@@ -464,14 +479,14 @@ class MemoryMeshServer:
     def run(self):
         async def _run():
             loop = asyncio.get_event_loop()
-            for sig in (signal.SIGINT, signal.SIGTERM):
-                try:
-                    loop.add_signal_handler(
-                        sig,
-                        lambda: asyncio.create_task(self._shutdown()),
-                    )
-                except NotImplementedError:
-                    pass
+            try:
+                loop.add_signal_handler(signal.SIGINT, lambda: asyncio.create_task(self._shutdown()))
+            except NotImplementedError:
+                pass  # Windows doesn't support add_signal_handler
+            try:
+                loop.add_signal_handler(signal.SIGTERM, lambda: asyncio.create_task(self._shutdown()))
+            except NotImplementedError:
+                pass  # Windows doesn't support add_signal_handler
             try:
                 if self.config.mcp_transport == "sse":
                     await self.run_sse()
@@ -510,9 +525,10 @@ def main():
     config.validate()
     setup_logging(config.log_level)
     db_dir = os.path.dirname(config.session.db_path)
-    _ensure_single_instance(db_dir)
+    lock_path = os.path.join(db_dir, "memorymesh.lock")
+    lock_fd = _try_acquire_lock(lock_path)
     try:
         server = MemoryMeshServer(config)
         server.run()
     finally:
-        _remove_pid_file(db_dir)
+        _release_lock(lock_fd)

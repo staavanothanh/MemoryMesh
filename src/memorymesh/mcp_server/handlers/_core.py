@@ -3,7 +3,6 @@ from contextvars import ContextVar
 from ...errors import MemoryMeshError
 
 _session_var: ContextVar[str] = ContextVar('_session_var', default='')
-_client_name_var: ContextVar[str] = ContextVar('_client_name_var', default='')
 
 _ERROR_PRESERVE_KEYWORDS = frozenset({
     "fix", "bug", "error", "crash", "failure", "fail", "hotfix", "patch",

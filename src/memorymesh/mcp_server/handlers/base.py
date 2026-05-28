@@ -8,7 +8,7 @@ import logging
 from typing import Optional, Any
 from cachetools import TTLCache
 
-from ._core import _log_bg, _safe_error_response, _ERROR_PRESERVE_KEYWORDS, _BOOTSTRAP_MAX_CHARS, _session_var, _client_name_var, _MAGENTA, _CYAN, _GREEN, _RESET, logger
+from ._core import _log_bg, _safe_error_response, _ERROR_PRESERVE_KEYWORDS, _BOOTSTRAP_MAX_CHARS, _session_var, _MAGENTA, _CYAN, _GREEN, _RESET, logger
 from .semantic_filter import SemanticFilter
 from .tracker import ConversationTracker
 from ...hooks import hooks as global_hooks
@@ -29,17 +29,12 @@ class ToolHandlers:
         "what did we do last session discussion topic",
     ]
 
-    @property
-    def _current_session_id(self):
-        return _session_var.get()
-
-    @_current_session_id.setter
-    def _current_session_id(self, value):
-        _session_var.set(value)
-
     def __init__(self, manager: MemoryManager, session_store: SessionStore):
         self.manager = manager
         self.session_store = session_store
+        self._session_map: dict[str, str] = {}
+        self._session_map_lock = asyncio.Lock()
+        self._connection_key: str = ""
         self._cached_workspace = None
         self._exchange_unsaved: bool = False
         self._reminder_count: int = 0
@@ -57,12 +52,17 @@ class ToolHandlers:
 
     # ── Session management ──────────────────────────────────────────────
 
-    async def set_session(self, session_id: str):
-        self._current_session_id = session_id
-        self._cached_workspace = None
-
     async def get_current_session_id(self) -> str:
-        return self._current_session_id
+        async with self._session_map_lock:
+            return self._session_map.get(self._connection_key, "")
+
+    async def set_session(self, session_id: str):
+        async with self._session_map_lock:
+            if session_id:
+                self._session_map[self._connection_key] = session_id
+            elif self._connection_key in self._session_map:
+                del self._session_map[self._connection_key]
+        self._cached_workspace = None
 
     def consume_reminder(self) -> str:
         return ""
@@ -168,8 +168,9 @@ class ToolHandlers:
     # ── Context & auto-save ─────────────────────────────────────────────
 
     async def _get_workspace_path(self) -> str:
-        if self._cached_workspace is None and self._current_session_id:
-            session = await self.session_store.get_session(self._current_session_id)
+        sid = await self.get_current_session_id()
+        if self._cached_workspace is None and sid:
+            session = await self.session_store.get_session(sid)
             if session:
                 self._cached_workspace = session.get("workspace_path", "") or ""
             else:
@@ -233,8 +234,9 @@ class ToolHandlers:
     async def ensure_session(self, args: dict) -> bool:
         """Auto-resume or create a session if none active. Returns True if initialized.
         Phase 5.1: Returns Context Delta (<800 tokens) for auto-recall."""
-        if self._current_session_id:
-            session = await self.session_store.get_session(self._current_session_id)
+        sid = await self.get_current_session_id()
+        if sid:
+            session = await self.session_store.get_session(sid)
             if session and session.get("status") == "active":
                 return False
 
@@ -252,7 +254,7 @@ class ToolHandlers:
                 for s in sessions:
                     if s.get("workspace_path", "") == wp:
                         sid = s["session_id"]
-                        self._current_session_id = sid
+                        await self.set_session(sid)
                         self._cached_workspace = None
 
                         # Phase 5.1: Compute Context Delta for auto-recall
@@ -279,20 +281,23 @@ class ToolHandlers:
         return True
 
     async def _log_context(self, role: str, content: str, tool_name: str = "", tool_args: str = ""):
-        if self._current_session_id:
+        sid = await self.get_current_session_id()
+        if sid:
             try:
-                await self.session_store.log_context(self._current_session_id, role, content, tool_name, tool_args)
+                await self.session_store.log_context(sid, role, content, tool_name, tool_args)
             except Exception as e:
                 logger.warning("Context log failed: %s", e)
 
-    def _session_tag(self) -> str:
-        return f"session:{self._current_session_id}" if self._current_session_id else ""
+    async def _session_tag(self) -> str:
+        sid = await self.get_current_session_id()
+        return f"session:{sid}" if sid else ""
 
     async def _save_context_memory(self, role: str, content: str, tool_name: str = ""):
-        if not (self._current_session_id and role in ("user", "assistant") and content.strip()):
+        sid = await self.get_current_session_id()
+        if not (sid and role in ("user", "assistant") and content.strip()):
             return
         try:
-            tags = ["conversation", "session", role, self._session_tag()]
+            tags = ["conversation", "session", role, await self._session_tag()]
             if tool_name:
                 tags.append(tool_name)
             await self.manager.add_memory(
@@ -307,12 +312,13 @@ class ToolHandlers:
             logger.warning("Context memory save failed: %s", e)
 
     async def save_auto_tool_context(self, tool_name: str, args: dict, result: dict):
-        if not self._current_session_id:
+        sid = await self.get_current_session_id()
+        if not sid:
             return
         if not self.manager.config.ecc_integration.auto_save_tool_context:
             return
         try:
-            session_tag = self._session_tag()
+            session_tag = await self._session_tag()
             match tool_name:
                 case "remember":
                     content = args.get("content", "")
@@ -371,7 +377,7 @@ class ToolHandlers:
             logger.warning("save_auto_tool_context failed: %s", e)
 
     async def _note_tool_call(self, tool_name: str, arguments: dict):
-        session_id = self._current_session_id
+        session_id = await self.get_current_session_id()
         if session_id and tool_name != "commit_milestone":
             await self._record_tool_call(session_id, tool_name, arguments)
 
@@ -382,15 +388,16 @@ class ToolHandlers:
 
     async def _trigger_teardown_snapshot(self):
         """Flush tracker's unsaved context to DB at session end or disconnect."""
-        if not self._current_session_id:
+        sid = await self.get_current_session_id()
+        if not sid:
             return
         try:
-            tracker = await self._get_tracker(self._current_session_id)
+            tracker = await self._get_tracker(sid)
             snapshot_text = tracker.teardown_flush()
             if snapshot_text and SemanticFilter.is_valuable(snapshot_text):
                 await self.manager.add_memory(
                     text=snapshot_text,
-                    tags=["auto_save", "session_final", "teardown", self._session_tag()],
+                    tags=["auto_save", "session_final", "teardown", await self._session_tag()],
                     importance=3,
                     level="session",
                     user_id=self.manager.config.default_user_id,
@@ -404,13 +411,14 @@ class ToolHandlers:
     # ── Depth & scan ────────────────────────────────────────────────────
 
     async def _layer3_depth_check(self):
-        if not self._current_session_id:
+        sid = await self.get_current_session_id()
+        if not sid:
             return
         try:
-            current_depth = await self.session_store.get_context_log_count(self._current_session_id)
+            current_depth = await self.session_store.get_context_log_count(sid)
             threshold = self.manager.config.session.compact_threshold
             if current_depth >= int(threshold * 0.8):
-                self._create_tracked_task(self._create_bootstrap_snapshot(self._current_session_id, self.manager.config.default_user_id))
+                self._create_tracked_task(self._create_bootstrap_snapshot(sid, self.manager.config.default_user_id))
                 logger.info("Layer 3 depth check: %d entries >= 80%% of %d, creating snapshot", current_depth, threshold)
         except Exception as e:
             logger.warning("Layer 3 depth check failed: %s", e)
@@ -424,7 +432,8 @@ class ToolHandlers:
             scanner = CodebaseScanner(workspace_path=path)
             snapshot = await asyncio.to_thread(scanner.scan)
             summary = snapshot.get("summary", "")
-            await self.session_store.save_workspace_snapshot(self._current_session_id, snapshot)
+            sid = await self.get_current_session_id()
+            await self.session_store.save_workspace_snapshot(sid, snapshot)
             memory_id = await self.manager.add_memory(
                 text=f"[Codebase Snapshot] {summary}",
                 tags=["codebase", "workspace", "knowledge"],
@@ -587,7 +596,7 @@ class ToolHandlers:
     async def _prewarm_and_flush(self, cache_key: str, user_id: str, wp: str):
         """Non-blocking pre-warm search + fact buffer flush after session finalization."""
         try:
-            results, _, _ = await self.manager.search_with_fallback(
+            results, _, _, _ = await self.manager.search_with_fallback(
                 query="session summary important decisions next steps",
                 top_k=5, user_id=user_id, workspace_path=wp,
                 max_tokens=500,
@@ -604,7 +613,7 @@ class ToolHandlers:
     async def _warm_resume_cache(self, session_id: str, uid: str, wp: str | None):
         """Pre-warm cache for resumed session — runs async, does not block."""
         try:
-            results, _, _ = await self.manager.search_with_fallback(
+            results, _, _, _ = await self.manager.search_with_fallback(
                 query="session summary context next steps",
                 top_k=10, user_id=uid, workspace_path=wp,
             )
@@ -752,7 +761,7 @@ class ToolHandlers:
                 results = cached_results
                 tier_used = "cache"
             else:
-                results, tier_used, _ = await self.manager.search_with_fallback(
+                results, tier_used, _, _ = await self.manager.search_with_fallback(
                     query=args["query"],
                     top_k=args.get("top_k", 10),
                     user_id=uid,
@@ -784,7 +793,7 @@ class ToolHandlers:
                     logger.debug("Bootstrap tag lookup failed: %s", e)
 
             # CHOKE-POINT: Block recall if too many uncommitted actions
-            session_id = self._current_session_id
+            session_id = await self.get_current_session_id()
             if session_id:
                 tracker = await self._get_tracker(session_id)
                 if tracker._uncommitted_actions >= ConversationTracker.CHOKE_THRESHOLD:
@@ -836,20 +845,33 @@ class ToolHandlers:
             return {"status": "error", "error": str(e)}
 
     async def _handle_recall_paginated(self, uid: str, wp: str, args: dict, raw_cursor: str) -> dict:
-        """Phase 6.2: Cursor-based pagination for deep recall pages."""
+        """Phase 6.2: Cursor-based pagination for deep recall pages.
+
+        Uses search_with_fallback with cursor state to maintain query relevance
+        across pages. Validates query_hash to prevent cursor reuse across queries.
+        """
+        import hashlib
+
         try:
             cursor_dict = json.loads(raw_cursor) if isinstance(raw_cursor, str) else raw_cursor
         except (json.JSONDecodeError, TypeError):
-            cursor_dict = None
+            return {"status": "error", "error": "Invalid cursor format"}
 
-        cm = getattr(self.manager, "context_manager", None)
-        if not cm:
-            return {"status": "error", "error": "Context manager not initialized"}
+        if not isinstance(cursor_dict, dict) or "query_hash" not in cursor_dict:
+            return {"status": "error", "error": "Cursor missing required field: query_hash"}
+
+        query = args.get("query", "")
+        expected_hash = hashlib.sha256(query.encode()).hexdigest()[:16]
+        if cursor_dict.get("query_hash") != expected_hash:
+            return {"status": "error", "error": "Cursor is invalid for this query — pagination must use the same query"}
 
         max_tokens = args.get("max_tokens") or self.manager.config.token_budget
         try:
-            page = await cm.get_context_page(
+            results, tier_used, meta, next_cursor = await self.manager.search_with_fallback(
+                query=query,
+                top_k=args.get("top_k", 10),
                 user_id=uid,
+                workspace_path=wp,
                 max_tokens=max_tokens,
                 cursor=cursor_dict,
             )
@@ -857,19 +879,26 @@ class ToolHandlers:
             logger.error("Paginated recall failed: %s", e)
             return {"status": "error", "error": str(e)}
 
-        results = page.get("results", [])
-        next_cursor = page.get("next_cursor")
-        has_more = page.get("has_more", False)
-
-        _log_bg("Recall", f"Page={page.get('next_cursor', {}).get('page', 1) if next_cursor else '?'}, results={len(results)}, query='{args['query'][:80]}'", emoji="")
-        await self._log_context("assistant", f"Paginated recall: {len(results)} results, has_more={has_more}", "recall", str(args))
+        has_more = next_cursor is not None
+        _log_bg("Recall", f"Page={cursor_dict.get('page', 1)}, results={len(results)}, tier={tier_used}, has_more={has_more}, query='{query[:80]}'", emoji="")
+        await self._log_context("assistant", f"Paginated recall: {len(results)} results, has_more={has_more}, tier={tier_used}", "recall", str(args))
 
         formatted = []
         for r in results:
-            prefix = "FACT" if "atomic_fact" in r.get("metadata", {}).get("tags", []) else "MEM"
+            tags = r.get("tags", []) or []
+            if "atomic_fact" in tags:
+                prefix = "FACT"
+            elif "narrative_thread" in tags:
+                prefix = "NARRATIVE"
+            elif "bootstrap" in tags or "workspace_state" in tags:
+                prefix = "BOOTSTRAP"
+            elif "session_summary" in tags:
+                prefix = "SUMMARY"
+            else:
+                prefix = "MEM"
             formatted.append(f"[{prefix}] {r.get('content', '')} (score: {r.get('score', 0.0):.2f})")
 
-        meta = {"count": len(results), "page": next_cursor.get("page", 1) if next_cursor else 1, "has_more": has_more}
+        meta = {"count": len(results), "page": cursor_dict.get("page", 1), "has_more": has_more, "tier": tier_used}
         if next_cursor:
             meta["next_cursor"] = json.dumps(next_cursor) if isinstance(raw_cursor, str) else next_cursor
 
@@ -939,7 +968,7 @@ class ToolHandlers:
 
     async def handle_recall_raw(self, args: dict) -> dict:
         try:
-            session_id = args.get("session_id", self._current_session_id)
+            session_id = args.get("session_id", await self.get_current_session_id())
             limit = args.get("limit", 50)
             offset = args.get("offset", 0)
             tool_name = args.get("tool_name", "")
@@ -977,7 +1006,7 @@ class ToolHandlers:
         if not self.manager.config.instinct.enabled:
             return {"status": "error", "error": "Instinct learning is disabled"}
         try:
-            session_id = args.get("session_id", self._current_session_id)
+            session_id = args.get("session_id", await self.get_current_session_id())
             user_id = args.get("user_id", self.manager.config.default_user_id)
             if not session_id:
                 return {"status": "error", "error": "No session specified"}
@@ -1166,7 +1195,8 @@ class ToolHandlers:
                 system_prompt = f"{system_prompt}\n\n{COMBINED_AGENT_INSTRUCTION}"
             if PERMANENT_LOG_DIRECTIVE not in system_prompt:
                 system_prompt = f"{system_prompt}\n\n{PERMANENT_LOG_DIRECTIVE}"
-            await self.session_store.update_system_prompt(self._current_session_id, system_prompt)
+            sid = await self.get_current_session_id()
+            await self.session_store.update_system_prompt(sid, system_prompt)
             memory_id = await self.manager.add_memory(
                 text=f"[System Prompt] {system_prompt}",
                 tags=["system_prompt", "session"],
@@ -1175,7 +1205,7 @@ class ToolHandlers:
                 user_id=user_id,
                 workspace_path=await self._get_workspace_path(),
             )
-            return {"status": "success", "data": {"session_id": self._current_session_id, "memory_id": memory_id, "recall_instruction": COMBINED_AGENT_INSTRUCTION}}
+            return {"status": "success", "data": {"session_id": sid, "memory_id": memory_id, "recall_instruction": COMBINED_AGENT_INSTRUCTION}}
         except MemoryMeshError as e:
             logger.error("Save system prompt failed: %s", e)
             return {"status": "error", "error": str(e)}
@@ -1196,7 +1226,7 @@ class ToolHandlers:
             # Save as milestone memory with high importance
             milestone_id = await self.manager.add_memory(
                 text=combined,
-                tags=["milestone", "narrative_thread", "checkpoint", self._session_tag()],
+                tags=["milestone", "narrative_thread", "checkpoint", await self._session_tag()],
                 importance=4,
                 level="session",
                 user_id=user_id,
@@ -1205,7 +1235,7 @@ class ToolHandlers:
 
             # Resolve tracker: reset actions + release hostage data
             released_data = None
-            session_id = self._current_session_id
+            session_id = await self.get_current_session_id()
             if session_id:
                 try:
                     tracker = await self._get_tracker(session_id)
@@ -1374,7 +1404,7 @@ class ToolHandlers:
             for result in all_results_raw:
                 if isinstance(result, Exception):
                     continue
-                results, tier, _ = result
+                results, tier, _, _ = result
                 for r in results:
                     rid = r.get("id")
                     if rid not in seen_ids:
@@ -1602,9 +1632,9 @@ class ToolHandlers:
                 system_prompt = f"{system_prompt}\n\n{COMBINED_AGENT_INSTRUCTION}"
             if PERMANENT_LOG_DIRECTIVE not in system_prompt:
                 system_prompt = f"{system_prompt}\n\n{PERMANENT_LOG_DIRECTIVE}"
-            if self._current_session_id:
-                prev_sid = self._current_session_id
-                self._current_session_id = ""
+            prev_sid = await self.get_current_session_id()
+            if prev_sid:
+                await self.set_session("")
                 self._create_tracked_task(self._finalize_session(prev_sid, user_id))
             session_id = await self.session_store.create_session(
                 user_id=user_id,
@@ -1613,7 +1643,7 @@ class ToolHandlers:
                 auto_close_stale=True,
                 stale_minutes=self.manager.config.session.stale_session_minutes,
             )
-            self._current_session_id = session_id
+            await self.set_session(session_id)
             self._exchange_unsaved = False
 
             # Parallel embedding: system prompt + session start marker
@@ -1629,7 +1659,7 @@ class ToolHandlers:
                 ))
             add_tasks.append(self.manager.add_memory(
                 text=f"[SESSION_START] Session {session_id[:8]} opened",
-                tags=["session_start", "bootstrap", "session", self._session_tag()],
+                tags=["session_start", "bootstrap", "session", await self._session_tag()],
                 importance=5,
                 level="session",
                 user_id=user_id,
@@ -1667,7 +1697,7 @@ class ToolHandlers:
 
     async def handle_end_session(self, args: dict) -> dict:
         try:
-            session_id = args.get("session_id", self._current_session_id)
+            session_id = args.get("session_id", await self.get_current_session_id())
             user_id = args.get("user_id", self.manager.config.default_user_id)
             if not session_id:
                 return {"status": "error", "error": "No active session to end"}
@@ -1677,8 +1707,8 @@ class ToolHandlers:
 
             await self._finalize_session(session_id, user_id)
 
-            if session_id == self._current_session_id:
-                self._current_session_id = ""
+            if session_id == await self.get_current_session_id():
+                await self.set_session("")
             await self._log_context("assistant", f"Session ended: {session_id}", "end_session", str(args))
             return {"status": "success", "data": {"session_id": session_id, "message": "Session ended"}}
         except MemoryMeshError as e:
@@ -1687,7 +1717,7 @@ class ToolHandlers:
 
     async def handle_delete_session(self, args: dict) -> dict:
         try:
-            session_id = args.get("session_id", self._current_session_id)
+            session_id = args.get("session_id", await self.get_current_session_id())
             user_id = args.get("user_id", self.manager.config.default_user_id)
             if not session_id:
                 return {"status": "error", "error": "No session specified"}
@@ -1712,8 +1742,8 @@ class ToolHandlers:
             # Step 3: Hard delete session record + context_log + snapshots (sessions.db)
             await self.session_store.hard_delete_session(session_id)
 
-            if session_id == self._current_session_id:
-                self._current_session_id = ""
+            if session_id == await self.get_current_session_id():
+                await self.set_session("")
             msg = f"Session permanently deleted" + (f" (auto-ended before delete)" if did_end else "")
             await self._log_context("assistant", f"Session deleted: {session_id}", "delete_session", str(args))
             return {"status": "success", "data": {"session_id": session_id, "preserved_count": preserved, "deleted_count": deleted, "message": msg}}
@@ -1723,7 +1753,7 @@ class ToolHandlers:
 
     async def handle_preserve_session_memories(self, args: dict) -> dict:
         try:
-            session_id = args.get("session_id", self._current_session_id)
+            session_id = args.get("session_id", await self.get_current_session_id())
             user_id = args.get("user_id", self.manager.config.default_user_id)
             if not session_id:
                 return {"status": "error", "error": "No session specified"}
@@ -1740,7 +1770,8 @@ class ToolHandlers:
             user_id = args.get("user_id", self.manager.config.default_user_id)
             raw_workspace_path = args.get("workspace_path", "")
             if not raw_workspace_path:
-                session = await self.session_store.get_session(self._current_session_id)
+                sid = await self.get_current_session_id()
+                session = await self.session_store.get_session(sid)
                 if session:
                     raw_workspace_path = session.get("workspace_path", "")
             if not raw_workspace_path:
@@ -1783,7 +1814,8 @@ class ToolHandlers:
                         snapshot["dependencies"]["project"] = deps[:30]
                     except Exception:
                         pass
-            await self.session_store.save_workspace_snapshot(self._current_session_id, snapshot)
+            sid = await self.get_current_session_id()
+            await self.session_store.save_workspace_snapshot(sid, snapshot)
             memory_id = await self.manager.add_memory(
                 text=f"[Workspace Snapshot] {json.dumps(snapshot, ensure_ascii=False)[:500]}",
                 tags=["workspace", "session"],

@@ -106,7 +106,7 @@ class EccIntegrationConfig:
 
 @dataclass
 class EmbeddingConfig:
-    mode: Literal["local", "remote"] = "local"
+    mode: Literal["local", "remote", "none"] = "local"
     model: str = "paraphrase-multilingual-MiniLM-L12-v2"
     remote_api_url: str = ""
     remote_api_key: str = ""

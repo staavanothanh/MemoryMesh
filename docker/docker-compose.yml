@@ -11,6 +11,7 @@ services:
       - ROUTER_URL=http://host.docker.internal:20128/v1
       - DEFAULT_MODEL=your-model
       - FALLBACK_MODEL=your-fallback-model
+      - EMBEDDING_MODE=none
       - EMBEDDING_MODEL=paraphrase-multilingual-MiniLM-L12-v2
       - DEFAULT_USER_ID=your_user_id
       - MCP_TRANSPORT=sse

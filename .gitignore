@@ -25,5 +25,7 @@ plan.md
 .vscode/
 .idea/
 .pytest_cache/
+.coverage
+htmlcov/
 Thumbs.db
 .DS_Store

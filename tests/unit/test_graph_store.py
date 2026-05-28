@@ -1,3 +1,4 @@
+import asyncio
 import json
 import pytest
 import pytest_asyncio
@@ -12,7 +13,7 @@ async def db():
     conn = await aiosqlite.connect(":memory:")
     conn.row_factory = aiosqlite.Row
     await conn.execute("PRAGMA foreign_keys = ON")
-    graph = GraphStore(conn)
+    graph = GraphStore(conn, asyncio.Lock())
     await graph.create_schema()
     yield (conn, graph)
     await conn.close()

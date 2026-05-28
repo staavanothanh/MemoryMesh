@@ -49,7 +49,7 @@ class TestSearchWithFallback:
         with patch.object(memory_manager, "search_memory", new=AsyncMock(return_value=[
             SearchResult(id="m1", content="test", score=0.95, tags=[], importance=3, timestamp=""),
         ])):
-            results, tier, meta = await memory_manager.search_with_fallback(
+            results, tier, meta, _ = await memory_manager.search_with_fallback(
                 query="test", top_k=5, user_id="test_user", min_score_threshold=0.3,
             )
             assert tier == "semantic"
@@ -67,7 +67,7 @@ class TestSearchWithFallback:
                                       new=AsyncMock(return_value=[
                                           {"id": "m2", "metadata": {"tags": [], "level": "session"}},
                                       ])):
-                        results, tier, meta = await memory_manager.search_with_fallback(
+                        results, tier, meta, _ = await memory_manager.search_with_fallback(
                             query="keyword", top_k=5, user_id="test_user",
                         )
                         assert tier == "fts_keyword"
@@ -86,7 +86,7 @@ class TestSearchWithFallback:
                                           new=AsyncMock(return_value=[
                                               {"id": "m3", "metadata": {"tags": [], "level": "session"}},
                                           ])):
-                            results, tier, meta = await memory_manager.search_with_fallback(
+                            results, tier, meta, _ = await memory_manager.search_with_fallback(
                                 query="xyz", top_k=5, user_id="test_user",
                             )
                             assert tier == "chronological"
@@ -100,7 +100,7 @@ class TestSearchWithFallback:
                     with patch.object(memory_manager.backend, "list_recent", new=AsyncMock(return_value=[])):
                         with patch.object(memory_manager.backend, "get_with_embeddings_by_ids",
                                           new=AsyncMock(return_value=[])):
-                            results, tier, meta = await memory_manager.search_with_fallback(
+                            results, tier, meta, _ = await memory_manager.search_with_fallback(
                                 query="nothing", top_k=5, user_id="test_user",
                             )
                             assert tier == "empty"
@@ -125,7 +125,7 @@ class TestSearchWithFallback:
         with patch.object(memory_manager, "search_memory", new=AsyncMock(return_value=[
             SearchResult(id="m1", content="ws memory", score=0.9, tags=[], importance=3, timestamp=""),
         ])):
-            results, tier, meta = await memory_manager.search_with_fallback(
+            results, tier, meta, _ = await memory_manager.search_with_fallback(
                 query="test", top_k=5, user_id="test_user",
                 workspace_path="/project/a",
             )
@@ -140,7 +140,7 @@ class TestSearchWithFallback:
         with patch.object(memory_manager, "search_memory", new=AsyncMock(return_value=[
             SearchResult(id="m1", content="test", score=0.9, tags=[], importance=3, timestamp=""),
         ])):
-            results, tier, meta = await memory_manager.search_with_fallback(
+            results, tier, meta, _ = await memory_manager.search_with_fallback(
                 query="test", top_k=5, user_id="test_user", max_tokens=50,
             )
             assert tier == "semantic"
@@ -155,7 +155,7 @@ class TestSearchWithFallback:
         with patch.object(memory_manager, "search_memory", new=AsyncMock(return_value=[
             SearchResult(id="high", content="high score", score=0.8, tags=[], importance=3, timestamp=""),
         ])):
-            results, tier, meta = await memory_manager.search_with_fallback(
+            results, tier, meta, _ = await memory_manager.search_with_fallback(
                 query="test", top_k=5, user_id="test_user", min_score_threshold=0.5,
             )
             assert tier == "semantic"
@@ -173,7 +173,7 @@ class TestSearchWithFallback:
                     with patch.object(memory_manager.backend, "list_recent", new=AsyncMock(return_value=[])):
                         with patch.object(memory_manager.backend, "get_with_embeddings_by_ids",
                                           new=AsyncMock(return_value=[])):
-                            results, tier, meta = await memory_manager.search_with_fallback(
+                            results, tier, meta, _ = await memory_manager.search_with_fallback(
                                 query="test", top_k=5, user_id="test_user", min_score_threshold=0.5,
                             )
                             assert tier == "empty"
