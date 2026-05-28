@@ -78,6 +78,45 @@ async def test_handle_recall(handlers):
 
 
 @pytest.mark.asyncio
+async def test_handle_recall_returns_context_restored(handlers):
+    """recall response should include context_restored in meta field."""
+    with patch("memorymesh.memory.manager.get_embedding", new=AsyncMock(return_value=SAMPLE_EMBEDDING)):
+        with patch("memorymesh.memory.manager.MemoryManager._enrich_memory", new=AsyncMock()):
+            await handlers.handle_remember({
+                "content": "Test context for signal",
+                "user_id": "test_user",
+            })
+
+    with patch("memorymesh.memory.manager.get_embedding", new=AsyncMock(return_value=SAMPLE_EMBEDDING)):
+        result = await handlers.handle_recall({
+            "query": "Test context for signal",
+            "top_k": 5,
+            "user_id": "test_user",
+        })
+
+    assert result["status"] == "success"
+    assert "meta" in result
+    assert "context_restored" in result["meta"]
+    assert isinstance(result["meta"]["context_restored"], bool)
+    assert "has_bootstrap" in result["meta"]
+
+
+@pytest.mark.asyncio
+async def test_handle_recall_context_restored_false_when_empty(handlers):
+    """recall with no results should set context_restored to false."""
+    with patch("memorymesh.memory.manager.get_embedding", new=AsyncMock(return_value=SAMPLE_EMBEDDING)):
+        result = await handlers.handle_recall({
+            "query": "nonexistent_xyzzy_12345",
+            "top_k": 5,
+            "user_id": "test_user",
+        })
+
+    assert result["status"] == "success"
+    assert result["meta"]["context_restored"] is False
+    assert result["meta"]["has_bootstrap"] is False
+
+
+@pytest.mark.asyncio
 async def test_handle_forget(handlers):
     with patch("memorymesh.memory.manager.get_embedding", new=AsyncMock(return_value=SAMPLE_EMBEDDING)):
         with patch("memorymesh.memory.manager.MemoryManager._enrich_memory", new=AsyncMock()):

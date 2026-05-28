@@ -185,9 +185,11 @@ class TestGetBootstrapScaffold:
             scaffold = await tool_handlers._get_bootstrap_scaffold(
                 "test_user", "/project",
             )
-            assert "Do NOT call" in scaffold
-            assert "git log" in scaffold
+            assert "CONTEXT RESTORATION" in scaffold
+            assert "INITIALIZATION COMPLETE" in scaffold
             assert "PAST SESSION CONTEXT" in scaffold
+            assert "redundant" in scaffold
+            assert "Do NOT" not in scaffold
 
 
 class TestBootstrapPrompt:

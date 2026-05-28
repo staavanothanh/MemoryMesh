@@ -60,7 +60,7 @@ TOOLS = [
     ),
     Tool(
         name="recall",
-        description="Recall memories by query. Call after new_session.",
+        description="Recall memories by query. Response includes context_restored signal in meta — true when bootstrap context loaded. Call this FIRST on session start.",
         inputSchema=_schema(RecallInput),
     ),
     Tool(
@@ -95,7 +95,7 @@ TOOLS = [
     ),
     Tool(
         name="commit_milestone",
-        description="Commit a milestone: summarize completed work, current state, and next steps. Call ONLY when finishing a logical block of work (e.g., multiple edits, a feature, a bug fix). Do NOT call after every response. Releases any held search results.",
+        description="Commit a milestone: summarize completed work, current state, and next steps. Call ONLY when finishing a logical block of work (e.g., multiple edits, a feature, a bug fix). Milestone saves are for checkpoints, not per-response. Releases any held search results.",
         inputSchema=_schema(CommitMilestoneInput),
     ),
     Tool(

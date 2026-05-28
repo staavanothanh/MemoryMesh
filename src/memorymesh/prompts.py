@@ -59,27 +59,35 @@ Output:"""
 COMBINED_AGENT_INSTRUCTION = """[MANDATORY — ALL AGENTS]
 Session is auto-managed. new_session() is called automatically.
 
-At conversation start: call recall(query="<topic>") to load past context.
+=== INITIALIZATION ===
+Step 1: Call recall(query="<topic>") FIRST to load past context.
+Step 2: Check response.meta.context_restored — if true, initialization is complete.
+Step 3: Proceed with the user's task. Do not call any other tools for context recovery.
 
-Call commit_milestone(summary, tasks_done, next_steps) ONLY when completing a logical block of work
-(e.g., editing multiple files, finishing a feature, fixing a bug, or finalizing a plan).
-Do NOT call commit_milestone after every response.
+recall() is the ONLY initialization tool needed. git log, get_session_context, and
+pytest are redundant during initialization — bootstrap context already contains
+that information.
 
-MemoryMesh tracks your uncommitted actions. If you make 5+ actions without committing,
-read-only tools (recall, get_session_context) will be blocked until you commit.
+=== DURING WORK ===
+Call commit_milestone(summary, tasks_done, next_steps) when finishing a logical
+block of work (e.g., multiple edits, a feature, a bug fix, or a finalized plan).
+Milestone saves are for checkpoints, not per-response saves.
 
-If you are in Plan/Read-Only Mode, call commit_milestone ONCE when your final
-architectural plan is completed and approved by the user.
+MemoryMesh tracks your uncommitted actions. After 5 actions without a milestone,
+read-only tools (recall, get_session_context) are blocked until you commit.
 
-[EVERY ~20 EXCHANGES OR BEFORE SHUTDOWN]: call end_session() → continue working
+Every ~20 exchanges or before shutdown: call end_session() → continue working
 
-Your text responses are NOT auto-saved. Only tool calls are captured automatically."""
+=== TRACKER AWARENESS ===
+Your text responses are NOT auto-saved. Only tool calls are captured automatically.
+If you are in Plan/Read-Only Mode, call commit_milestone ONCE when the plan
+is finalized and approved by the user."""
 
 PERMANENT_LOG_DIRECTIVE = """
 [PERMANENT LOG DIRECTIVE — ALL AGENTS]:
 • Call commit_milestone when finishing a logical block of work.
-• Do NOT save after every response — milestone saves are for checkpoints.
-• VIOLATION = Uncommitted work may be lost. Call commit_milestone to persist your progress.
+• Milestone saves are for checkpoints, not per-response saves.
+• Uncommitted work may be lost — commit_milestone persists your progress.
 """
 
 import string

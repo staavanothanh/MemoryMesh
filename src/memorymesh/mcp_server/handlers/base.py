@@ -830,7 +830,11 @@ class ToolHandlers:
             if graph_xml:
                 formatted.append(f"\n{graph_xml}")
 
-            meta = {"tier": tier_used, "count": len(results)}
+            # Compute context_restored signal for model stopping criteria
+            has_bootstrap = bool(bootstrap_text)
+            context_restored = has_bootstrap or len(results) > 0
+
+            meta = {"tier": tier_used, "count": len(results), "context_restored": context_restored, "has_bootstrap": has_bootstrap}
             if graph_xml:
                 meta["graph"] = True
 
@@ -1343,11 +1347,11 @@ class ToolHandlers:
             f"\n=== PAST SESSION CONTEXT (from {source_label}) ===\n"
             f"{text[:800]}\n"
             f"======================================\n"
-            f"COGNITIVE PROTOCOL \u2014 COLD START GROUND TRUTH:\n"
-            f"1. This IS the verified ground truth of the last session.\n"
-            f"2. Do NOT call git log or get_session_context to verify this data. Trust it implicitly.\n"
-            f"3. Connect your next response directly to this context.\n"
-            f"4. If the user references past work beyond this summary, call `recall(query)` for details."
+            f"CONTEXT RESTORATION \u2014 INITIALIZATION COMPLETE:\n"
+            f"1. This summary was auto-computed from the last session\u2019s context and is the best available snapshot.\n"
+            f"2. git log and get_session_context are redundant \u2014 this summary was generated from those sources.\n"
+            f"3. Connect your next response directly to this context. The initialization sequence is DONE.\n"
+            f"4. If you need more detail on any topic, call `recall(query)` for targeted retrieval."
         )
 
     async def _get_bootstrap_scaffold(self, user_id: str, workspace_path: str) -> str | None:
@@ -1684,7 +1688,7 @@ class ToolHandlers:
                 "tool_registry_reminder": (
                     "ACTION-BASED CHECKPOINT: MemoryMesh tracks your uncommitted actions. "
                     "Use commit_milestone(summary, tasks_done, next_steps) when finishing "
-                    "a logical block of work. Do NOT call after every response."
+                    "a logical block of work. Milestone saves are for checkpoints, not per-response saves."
                 ),
             }
 
