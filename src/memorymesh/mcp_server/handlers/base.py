@@ -509,8 +509,9 @@ class ToolHandlers:
                 if val:
                     details.append(f"\n\u25a0 {key.replace('_', ' ').title()}: {val[:200]}")
             memory_text = f"[Bootstrap] {narrative[:300]}" + "".join(details)
-            searchable_prefix = "buoi truoc session ket thuc du an lam viec last "
-            full_text = searchable_prefix + memory_text[:970]
+            # No Vietnamese search prefix — tags ["bootstrap", "workspace_state", "session_summary"]
+            # are sufficient for FTS discovery. Structured format allows more content.
+            full_text = memory_text[:1900]
 
             memory_id = await self.manager.add_memory(
                 text=full_text,
@@ -829,6 +830,55 @@ class ToolHandlers:
             graph_xml = await graph_task
             if graph_xml:
                 formatted.append(f"\n{graph_xml}")
+
+            # --- PHASE 5: Structural context (entity seeds, git, workspace) ---
+            # Knowledge Graph entity seeds: list available entities for the model to explore
+            try:
+                if self.manager.graph is not None:
+                    entities = await self.manager.graph.list_entities(uid, limit=5)
+                    if entities:
+                        entity_list = ", ".join(e["name"].replace("_", " ") for e in entities)
+                        formatted.append(
+                            f"\n--- Available Knowledge Graph Entities ---\n"
+                            f"{entity_list}\n"
+                            f"Use query_graph(entity_name) to explore any of these."
+                        )
+            except Exception:
+                pass
+
+            # Git context from RAM cache (pre-computed by _bg_new_session_tasks)
+            try:
+                cached_bootstrap = self._global_bootstrap_ram_cache.get(cache_key, "")
+                if cached_bootstrap and "Recent commits:" in cached_bootstrap:
+                    # Extract git section (text after double newline)
+                    git_idx = cached_bootstrap.find("Recent commits:")
+                    if git_idx >= 0:
+                        git_section = cached_bootstrap[git_idx:git_idx+500]
+                        formatted.append(f"\n--- Project State ---\n{git_section}")
+            except Exception:
+                pass
+
+            # Workspace file structure from session_store
+            try:
+                session_id = await self.get_current_session_id()
+                if session_id:
+                    snapshots = await self.session_store.get_workspace_snapshots(
+                        session_id, limit=1
+                    )
+                    for snap in snapshots:
+                        data = snap.get("snapshot_data", {})
+                        files_data = data.get("files", {})
+                        dirs = files_data.get("dirs", [])[:10]
+                        top_files = files_data.get("files", [])[:10]
+                        if dirs or top_files:
+                            parts = []
+                            if dirs:
+                                parts.append(f"Dirs: {', '.join(dirs)}")
+                            if top_files:
+                                parts.append(f"Files: {', '.join(top_files)}")
+                            formatted.append(f"\n--- Project Structure ---\n" + "\n".join(parts))
+            except Exception:
+                pass
 
             # Compute context_restored signal for model stopping criteria
             has_bootstrap = bool(bootstrap_text)
@@ -1345,13 +1395,11 @@ class ToolHandlers:
     def _format_bootstrap(text: str, source_label: str = "memory") -> str:
         return (
             f"\n=== PAST SESSION CONTEXT (from {source_label}) ===\n"
-            f"{text[:800]}\n"
+            f"{text[:1200]}\n"
             f"======================================\n"
-            f"CONTEXT RESTORATION \u2014 INITIALIZATION COMPLETE:\n"
-            f"1. This summary was auto-computed from the last session\u2019s context and is the best available snapshot.\n"
-            f"2. git log and get_session_context are redundant \u2014 this summary was generated from those sources.\n"
-            f"3. Connect your next response directly to this context. The initialization sequence is DONE.\n"
-            f"4. If you need more detail on any topic, call `recall(query)` for targeted retrieval."
+            f"CONTEXT RESTORATION — INITIALIZATION COMPLETE.\n"
+            f"This snapshot includes session memory, git history, and project structure.\n"
+            f"For deeper investigation, call `recall(query)` for targeted retrieval."
         )
 
     async def _get_bootstrap_scaffold(self, user_id: str, workspace_path: str) -> str | None:
@@ -1610,6 +1658,18 @@ class ToolHandlers:
                     cache_key = f"{user_id}:{workspace_path}" if workspace_path else user_id
                     existing = self._global_bootstrap_ram_cache.get(cache_key, "")
                     self._global_bootstrap_ram_cache[cache_key] = f"{existing}\n\n{ctx}" if existing else ctx
+                    # Persist git context as a searchable memory (survives server restart)
+                    try:
+                        await self.manager.add_memory(
+                            text=f"[Git Context]\n{ctx[:800]}",
+                            tags=["git", "project_context", "bootstrap"],
+                            importance=4,
+                            level="knowledge",
+                            user_id=user_id,
+                            workspace_path=workspace_path,
+                        )
+                    except Exception as mem_err:
+                        logger.debug("Git context memory persist failed: %s", mem_err)
         except Exception as e:
             logger.debug("Background git context failed: %s", e)
 

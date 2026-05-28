@@ -188,7 +188,7 @@ class TestGetBootstrapScaffold:
             assert "CONTEXT RESTORATION" in scaffold
             assert "INITIALIZATION COMPLETE" in scaffold
             assert "PAST SESSION CONTEXT" in scaffold
-            assert "redundant" in scaffold
+            assert "snapshot includes" in scaffold
             assert "Do NOT" not in scaffold
 
 

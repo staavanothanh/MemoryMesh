@@ -207,7 +207,7 @@ class MemoryManager:
             self._create_tracked_task(self._update_embedding_background(memory_id, text))
 
         # Background tasks with rate-limiting
-        self._create_tracked_task(self._run_background_tasks(memory_id, text, level, user_id))
+        self._create_tracked_task(self._run_background_tasks(memory_id, text, level, user_id, importance, tags))
 
         # Trigger post-tool hooks
         if self.hooks:
@@ -217,7 +217,8 @@ class MemoryManager:
 
         return memory_id
 
-    async def _run_background_tasks(self, memory_id: str, text: str, level: str, user_id: str):
+    async def _run_background_tasks(self, memory_id: str, text: str, level: str, user_id: str,
+                                     importance: int = 3, tags: Optional[List[str]] = None):
         """Run background tasks with rate-limiting for expensive operations."""
         now = time.monotonic()
 
@@ -247,7 +248,49 @@ class MemoryManager:
             self._last_expiry[user_id] = now
             self._create_tracked_task(self._maybe_expire_memories(user_id))
 
+        # 6. Auto Knowledge Graph entity: for high-importance non-session memories
+        # Uses regex-only extraction — zero LLM cost.
+        if self.graph is not None and level != "session" and importance >= 4:
+            self._create_tracked_task(
+                self._auto_create_entities(memory_id, text, user_id)
+            )
+
         # FTS reconciliation no longer needed — vector + FTS in single ACID transaction
+
+    async def _auto_create_entities(self, memory_id: str, text: str, user_id: str):
+        """Extract entity names from high-importance memory text using regex (zero LLM cost).
+        Creates Knowledge Graph entities for capitalized multi-word terms and PascalCase names.
+        Deduplication via normalized name matching is built into GraphStore.create_entity()."""
+        if self.graph is None or not text:
+            return
+        try:
+            # Pattern 1: Capitalized multi-word terms (e.g. "Knowledge Graph", "Session Manager")
+            capitalized = re.findall(r'\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2}\b', text)
+            # Pattern 2: PascalCase names (e.g. "MemoryManager", "GraphStore")
+            pascal = re.findall(r'\b([A-Z][a-z]+(?:[A-Z][a-z]+)+)\b', text)
+            # Pattern 3: snake_case module/function names (e.g. "search_memory", "auto_create")
+            snake = re.findall(r'\b([a-z]+(?:_[a-z]+)+)\b', text)
+
+            entity_names = set(capitalized) | set(pascal)
+            entity_names = {n.strip() for n in entity_names if len(n.strip()) >= 3}
+
+            for name in entity_names:
+                try:
+                    await self.graph.create_entity(
+                        name=name, user_id=user_id, entity_type="concept",
+                        properties={"source_memory_id": memory_id},
+                    )
+                except Exception:
+                    pass  # Duplicates are silently handled by create_entity
+
+            if entity_names:
+                logger.debug("Auto-created %d entities from memory %s: %s",
+                             len(entity_names), memory_id[:12], list(entity_names)[:5])
+
+            # Also create a session-level entity linking this memory
+            # snake_case names are too noisy (function calls in text) — skip them
+        except Exception as e:
+            logger.debug("Auto entity creation failed for %s: %s", memory_id[:12], e)
 
     async def _update_embedding_background(self, memory_id: str, text: str):
         """Phase 7.3: Compute real embedding in background and update vec table."""
@@ -615,15 +658,22 @@ class MemoryManager:
         ]
 
         # Level-weighted scoring when no filter: boost session > user > knowledge
+        # Noise tag penalty: auto_save and auto_snapshot tags get penalized (score *= 0.3)
+        # instead of receiving the session-level boost, to prevent ~80% noise domination.
         if not level_filter:
             level_weights = {
                 "session": self.config.level_weight_session,
                 "user": self.config.level_weight_user,
                 "knowledge": self.config.level_weight_knowledge,
             }
+            NOISE_TAGS = frozenset({"auto_save", "auto_snapshot"})
             for m in results:
                 lvl = m.get("metadata", {}).get("level", "user")
-                m["score"] = m["score"] * level_weights.get(lvl, 1.0)
+                tags = m.get("metadata", {}).get("tags", [])
+                if isinstance(tags, list) and any(t in NOISE_TAGS for t in tags):
+                    m["score"] *= 0.3  # Penalize auto-saves instead of boosting
+                else:
+                    m["score"] = m["score"] * level_weights.get(lvl, 1.0)
 
         budget = max_tokens if max_tokens is not None else self.config.token_budget
 
