@@ -1,5 +1,5 @@
 <div align="right">
-  <a href="README.md">🇺🇸 English</a> | <strong>🇻🇳 Tiếng Việt</strong>
+  <strong>🇺🇸 English</strong> | <a href="README.vi.md">🇻🇳 Tiếng Việt</a>
 </div>
 
 <div align="center">
