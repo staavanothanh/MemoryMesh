@@ -29,3 +29,7 @@ plan.md
 htmlcov/
 Thumbs.db
 .DS_Store
+# --- Agent Coding
+.agents/
+.claude/
+.codex/
